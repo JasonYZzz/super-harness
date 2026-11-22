@@ -45,6 +45,32 @@ public class Approvals {
         return pending;
     }
 
+    /** Immutable proposal data, also available after an approval closes for exact replay. */
+    public Map<String, Object> proposal(Principal p, UUID thread, UUID approval) {
+        var role = catalog.role(p);
+        var row =
+                sql.first(
+                                """
+                                SELECT BIN_TO_UUID(a.run_id) AS runId, BIN_TO_UUID(a.tool_execution_id) AS toolCallId,
+                                       a.requested_args_sha256 AS argsHash, a.expires_at AS expiresAt,
+                                       t.result_ref->>'$.text' AS text, t.result_ref->>'$.size' AS bytes,
+                                       r.request_key AS requestKey, e.seq AS interruptSeq
+                                FROM approvals a JOIN agent_runs r ON r.tenant_id=a.tenant_id AND r.id=a.run_id
+                                JOIN tool_executions t ON t.tenant_id=a.tenant_id AND t.id=a.tool_execution_id
+                                JOIN run_events e ON e.run_id=r.id AND e.event_type='approval.required'
+                                      AND e.payload->>'$.approvalId'=BIN_TO_UUID(a.id)
+                                WHERE a.tenant_id=? AND a.id=? AND r.conversation_id=? AND r.requested_by=?
+                                """,
+                                p.tenant(),
+                                approval,
+                                thread,
+                                p.user())
+                        .orElseThrow(Problem::missing);
+        Sql.utcTimes(row, "expiresAt");
+        row.put("canDecide", Set.of("OWNER", "APPROVER").contains(role));
+        return row;
+    }
+
     @Transactional
     public void decide(Principal p, UUID id, String hash, boolean approve) {
         if (!Set.of("OWNER", "APPROVER").contains(catalog.role(p))) throw Problem.denied();

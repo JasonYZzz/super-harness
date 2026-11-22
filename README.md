@@ -27,6 +27,12 @@ AGENTSCOPE_MYSQL_DATABASE=super_harness_runtime
 
 开发签名密钥在首次启动时生成，默认保存在 `~/.config/super-harness/dev-jwt.key`。使用 `./scripts/dev-down.sh` 停止服务。日志位于 `.local/{api,worker,reconciler}.log`。运行集成测试和 Docker 沙箱需要可用的 Docker 服务。
 
+### 使用 AG-UI 客户端
+
+在已有会话右上角选「面板 → 在 AG-UI 客户端打开」。页面与控制台共用登录身份和会话，可查看流式回答、执行计划及本轮用量。Agent 启用发布审批时，可以核对回答与参数摘要，批准后直接下载 `response.txt`。同一标签页刷新后会恢复当前交互。
+
+其他客户端可使用 `@ag-ui/client@1.0.5` 的 `HttpAgent`，携带 Bearer JWT 向 `POST /api/v1/ag-ui/runs` 发送请求。用会话 UUID 作 `threadId`，每个新回合生成一个 `runId`，重试沿用原值。审批续接使用新的 `runId` 和服务端发出的 `interruptId`。[请求样例](docs/api/openapi.json) · [协议与审批流程](docs/ag-ui-implementation-plan.md)
+
 ### 设置聊天模型
 
 在聊天页右上角点击「选择模型」或当前模型名称。可用模型从 Java 服务读取。在空闲会话切换后，下一条消息使用新模型，历史和重试保留各自提交时的模型。创建 Agent 时可以设置初始模型，从已有会话新建时会继承当前选择。

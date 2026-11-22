@@ -297,6 +297,226 @@ class AccessTest {
     }
 
     @Test
+    void interactionReplaysMultiplePagesAndCorrectsOnlyTheHistoricalTurn() throws Exception {
+        var owner = new io.superharness.domain.Principal("local", "developer");
+        var agent = catalog.createAgent(owner, "agui replay");
+        var revision =
+                catalog.publish(
+                        owner, agent, "test", "local-echo", "agui-pages", 1, java.util.Map.of());
+        var thread = catalog.conversation(owner, agent, revision);
+        runs.submitInteraction(owner, thread, "first", "user-first", "original");
+        var e = scheduler.claim("worker", "agui-pages", 1).orElseThrow();
+        lifecycle.start(e);
+        for (int n = 0; n < 130; n++) lifecycle.delta(e, "试");
+        lifecycle.finish(e, "canonical", null);
+        runs.submitInteraction(owner, thread, "next", "user-next", "later input");
+        var request =
+                post("/api/v1/ag-ui/runs")
+                        .contentType("application/json")
+                        .accept("text/event-stream")
+                        .content(
+                                mapper.writeValueAsBytes(
+                                        java.util.Map.of(
+                                                "threadId",
+                                                thread,
+                                                "runId",
+                                                "first",
+                                                "messages",
+                                                java.util.List.of(
+                                                        java.util.Map.of(
+                                                                "id",
+                                                                "user-first",
+                                                                "role",
+                                                                "user",
+                                                                "content",
+                                                                "original")))));
+        mvc.perform(request).andExpect(status().isUnauthorized());
+        var wrong = jwt().jwt(t -> t.subject("developer").claim("tenant_id", "other"));
+        mvc.perform(request.with(wrong)).andExpect(status().isForbidden());
+        var member = "agui-reader";
+        tenants.member(owner, member, "MEMBER", true);
+        mvc.perform(request.with(jwt().jwt(t -> t.subject(member).claim("tenant_id", "local"))))
+                .andExpect(status().isNotFound());
+        long started = System.nanoTime();
+        var r =
+                mvc.perform(
+                                request.with(
+                                        jwt().jwt(
+                                                        t ->
+                                                                t.subject("developer")
+                                                                        .claim("tenant_id", "local")
+                                                                        .expiresAt(
+                                                                                java.time.Instant
+                                                                                        .now()
+                                                                                        .plusSeconds(
+                                                                                                60)))))
+                        .andExpect(request().asyncStarted())
+                        .andReturn();
+        r.getAsyncResult(10000);
+        var frames = new java.util.ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+        for (String line :
+                r.getResponse()
+                        .getContentAsString(java.nio.charset.StandardCharsets.UTF_8)
+                        .lines()
+                        .toList())
+            if (line.startsWith("data: ")) frames.add(mapper.readTree(line.substring(6)));
+        assertEquals(
+                130L,
+                frames.stream()
+                        .filter(f -> f.path("type").asText().equals("TEXT_MESSAGE_CONTENT"))
+                        .count());
+        var snapshot =
+                frames.stream()
+                        .filter(f -> f.path("type").asText().equals("MESSAGES_SNAPSHOT"))
+                        .findFirst()
+                        .orElseThrow()
+                        .path("messages");
+        assertEquals(2, snapshot.size());
+        assertEquals("user-first", snapshot.get(0).path("id").asText());
+        assertEquals("canonical", snapshot.get(1).path("content").asText());
+        assertEquals("RUN_FINISHED", frames.getLast().path("type").asText());
+        System.out.printf(
+                "AG-UI replay: %d ledger rows, 2 data pages, %d ms%n",
+                ((Number) runs.status(owner, e.run()).get("lastSeq")).longValue(),
+                (System.nanoTime() - started) / 1_000_000);
+    }
+
+    @Test
+    void expiredApprovalCannotPublishAndAClosedSubscriptionCanReplay() throws Exception {
+        var p = new io.superharness.domain.Principal("local", "developer");
+        var agent = catalog.createAgent(p, "approval expiry");
+        var revision =
+                catalog.publish(
+                        p,
+                        agent,
+                        "test",
+                        "local-echo",
+                        "agui-expiry",
+                        1,
+                        java.util.Map.of("outputMode", "APPROVED_ARTIFACT"));
+        var thread = catalog.conversation(p, agent, revision);
+        runs.submitInteraction(p, thread, "turn", "input", "text");
+        var e = scheduler.claim("worker", "agui-expiry", 1).orElseThrow();
+        lifecycle.start(e);
+        lifecycle.awaitApproval(e, "result", artifacts.stage(p.tenant(), "result"));
+        var approval =
+                approvals.pending(p).stream()
+                        .filter(a -> e.run().toString().equals(a.get("runId")))
+                        .findFirst()
+                        .orElseThrow();
+        var aid = java.util.UUID.fromString((String) approval.get("id"));
+        sql.update(
+                "UPDATE approvals SET expires_at=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND WHERE id=?",
+                aid);
+        var body =
+                java.util.Map.of(
+                        "threadId",
+                        thread,
+                        "runId",
+                        "decision",
+                        "resume",
+                        java.util.List.of(
+                                java.util.Map.of(
+                                        "interruptId",
+                                        aid,
+                                        "status",
+                                        "resolved",
+                                        "payload",
+                                        java.util.Map.of(
+                                                "approved",
+                                                true,
+                                                "argsHash",
+                                                approval.get("argsHash")))));
+        var request =
+                post("/api/v1/ag-ui/runs")
+                        .contentType("application/json")
+                        .accept("text/event-stream")
+                        .content(mapper.writeValueAsBytes(body))
+                        .with(
+                                jwt().jwt(
+                                                t ->
+                                                        t.subject("developer")
+                                                                .claim("tenant_id", "local")
+                                                                .expiresAt(
+                                                                        java.time.Instant.now()
+                                                                                .plusSeconds(60))));
+        var response = mvc.perform(request).andExpect(request().asyncStarted()).andReturn();
+        response.getAsyncResult(10000);
+        org.junit.jupiter.api.Assertions.assertTrue(
+                response.getResponse().getContentAsString().contains("APPROVAL_CLOSED"));
+        assertEquals("WAITING_APPROVAL", runs.status(p, e.run()).get("status"));
+        assertEquals(0, artifacts.list(p, e.run()).size());
+        sql.update(
+                "UPDATE agent_runs SET deadline_at=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND WHERE id=?",
+                e.run());
+        lifecycle.reapOne();
+        assertEquals("DEADLINE_EXCEEDED", runs.status(p, e.run()).get("errorCode"));
+
+        var queued = runs.submitInteraction(p, thread, "cancel", "cancel-message", "cancel me");
+        var queuedId = java.util.UUID.fromString(queued.get("runId").toString());
+        var jwt =
+                org.springframework.security.oauth2.jwt.Jwt.withTokenValue("fixture")
+                        .header("alg", "none")
+                        .subject("developer")
+                        .claim("tenant_id", "local")
+                        .issuedAt(java.time.Instant.now().minusSeconds(10))
+                        .expiresAt(java.time.Instant.now().minusSeconds(1))
+                        .build();
+        var out = new java.io.ByteArrayOutputStream();
+        RunStream.tail(
+                runs,
+                p,
+                queuedId,
+                0,
+                jwt,
+                out,
+                new org.springframework.mock.web.MockHttpServletResponse(),
+                event -> {
+                    throw new AssertionError("Expired subscription delivered events");
+                });
+        assertEquals("QUEUED", runs.status(p, queuedId).get("status"));
+        lifecycle.cancel(p, queuedId);
+        var cancelled =
+                mvc.perform(
+                                post("/api/v1/ag-ui/runs")
+                                        .contentType("application/json")
+                                        .content(
+                                                mapper.writeValueAsBytes(
+                                                        java.util.Map.of(
+                                                                "threadId",
+                                                                thread,
+                                                                "runId",
+                                                                "cancel",
+                                                                "messages",
+                                                                java.util.List.of(
+                                                                        java.util.Map.of(
+                                                                                "id",
+                                                                                "cancel-message",
+                                                                                "role",
+                                                                                "user",
+                                                                                "content",
+                                                                                "cancel me")))))
+                                        .with(
+                                                jwt().jwt(
+                                                                t ->
+                                                                        t.subject("developer")
+                                                                                .claim(
+                                                                                        "tenant_id",
+                                                                                        "local")
+                                                                                .expiresAt(
+                                                                                        java.time
+                                                                                                .Instant
+                                                                                                .now()
+                                                                                                .plusSeconds(
+                                                                                                        60)))))
+                        .andExpect(request().asyncStarted())
+                        .andReturn();
+        cancelled.getAsyncResult(10000);
+        org.junit.jupiter.api.Assertions.assertTrue(
+                cancelled.getResponse().getContentAsString().contains("CANCELLED"));
+    }
+
+    @Test
     void missingIdentityAndCrossTenantAccessAreDenied() throws Exception {
         mvc.perform(get("/api/v1/agents")).andExpect(status().isUnauthorized());
         var owner = jwt().jwt(t -> t.subject("developer").claim("tenant_id", "local"));

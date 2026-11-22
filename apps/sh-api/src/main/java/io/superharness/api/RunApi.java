@@ -45,6 +45,8 @@ class RunApi {
             @AuthenticationPrincipal Jwt jwt,
             @RequestHeader("Idempotency-Key") String key,
             @RequestBody @Valid RunInput body) {
+        if (key.startsWith("agui-"))
+            throw new io.superharness.domain.Problem(400, "RESERVED_IDEMPOTENCY_KEY");
         var status =
                 runs.submit(
                         Identity.principal(jwt),

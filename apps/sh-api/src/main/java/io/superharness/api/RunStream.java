@@ -13,7 +13,9 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.io.*;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -47,7 +49,7 @@ class RunStream {
             summary = "Replay committed run events in sequence order",
             description =
                     "SSE id is runId:seq. Last-Event-ID takes precedence over afterSeq."
-                        + " Disconnecting leaves the run active.")
+                            + " Disconnecting leaves the run active.")
     @GetMapping(value = "/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     ResponseEntity<StreamingResponseBody> events(
             @AuthenticationPrincipal Jwt jwt,
@@ -61,47 +63,82 @@ class RunStream {
         long start = cursor(id, header, afterSeq);
         if (start < 0 || start > ((Number) status.get("lastSeq")).longValue())
             throw new Problem(400, "INVALID_EVENT_CURSOR");
+        return response(
+                request,
+                out ->
+                        tail(
+                                runs,
+                                p,
+                                id,
+                                start,
+                                jwt,
+                                out,
+                                response,
+                                event -> {
+                                    out.write(
+                                            ("id: "
+                                                            + event.get("eventId")
+                                                            + "\nevent: "
+                                                            + event.get("type")
+                                                            + "\ndata: ")
+                                                    .getBytes(UTF_8));
+                                    out.write(mapper.writeValueAsBytes(event));
+                                    out.write("\n\n".getBytes(UTF_8));
+                                    return false;
+                                }));
+    }
+
+    @FunctionalInterface
+    interface EventWriter {
+        /** True at a protocol terminal boundary, which can precede the platform terminal state. */
+        boolean write(Map<String, Object> event) throws IOException;
+    }
+
+    static void tail(
+            Runs runs,
+            Principal p,
+            UUID id,
+            long after,
+            Jwt jwt,
+            OutputStream out,
+            jakarta.servlet.http.HttpServletResponse response,
+            EventWriter writer)
+            throws IOException {
+        long keepAlive = 0;
+        while (jwt.getExpiresAt() != null && Instant.now().isBefore(jwt.getExpiresAt())) {
+            var batch = runs.events(p, id, after);
+            for (var event : batch) {
+                if (writer.write(event)) {
+                    out.flush();
+                    return;
+                }
+                after = ((Number) event.get("seq")).longValue();
+            }
+            if (!batch.isEmpty()) {
+                out.flush();
+                response.flushBuffer();
+                continue;
+            }
+            var current = runs.status(p, id);
+            if (RunLifecycle.terminalStatus(current.get("status"))
+                    && after >= ((Number) current.get("lastSeq")).longValue()) return;
+            if (System.nanoTime() >= keepAlive) {
+                out.write(": heartbeat\n\n".getBytes(UTF_8));
+                out.flush();
+                keepAlive = System.nanoTime() + 15_000_000_000L;
+            }
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException stop) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    static ResponseEntity<StreamingResponseBody> response(
+            jakarta.servlet.http.HttpServletRequest request, StreamingResponseBody stream) {
         org.springframework.web.filter.ShallowEtagHeaderFilter.disableContentCaching(request);
-        StreamingResponseBody stream =
-                out -> {
-                    long after = start, keepAlive = 0;
-                    while (jwt.getExpiresAt() != null
-                            && Instant.now().isBefore(jwt.getExpiresAt())) {
-                        var batch = runs.events(p, id, after);
-                        for (var e : batch) {
-                            out.write(
-                                    ("id: "
-                                                    + e.get("eventId")
-                                                    + "\nevent: "
-                                                    + e.get("type")
-                                                    + "\ndata: ")
-                                            .getBytes(UTF_8));
-                            out.write(mapper.writeValueAsBytes(e));
-                            out.write("\n\n".getBytes(UTF_8));
-                            after = ((Number) e.get("seq")).longValue();
-                        }
-                        if (!batch.isEmpty()) {
-                            out.flush();
-                            response.flushBuffer();
-                            continue;
-                        }
-                        var current = runs.status(p, id);
-                        if (RunLifecycle.terminalStatus(current.get("status"))
-                                && after >= ((Number) current.get("lastSeq")).longValue()) return;
-                        if (System.nanoTime() >= keepAlive) {
-                            out.write(": heartbeat\n\n".getBytes(UTF_8));
-                            out.flush();
-                            response.flushBuffer();
-                            keepAlive = System.nanoTime() + 15_000_000_000L;
-                        }
-                        try {
-                            Thread.sleep(250);
-                        } catch (InterruptedException stop) {
-                            Thread.currentThread().interrupt();
-                            return;
-                        }
-                    }
-                };
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_EVENT_STREAM)
                 .cacheControl(CacheControl.noStore())

@@ -1,5 +1,21 @@
 # 研发验收记录
 
+## AG-UI 开发交付
+
+会话页面通过官方 `@ag-ui/client@1.0.5` 连接 `POST /api/v1/ag-ui/runs`。开发验收从打包后的 API、Worker、Reconciler 启动，用临时 MySQL 双库、确定性模型与本地 OpenAI 兼容夹具完成。项目沿用既有任务、审批与账本，本次数据库迁移数为零。[实施计划](ag-ui-implementation-plan.md) · [接口样例](api/openapi.json)
+
+| 检查 | 结果 |
+|---|---|
+| 构建与事务 | `./mvnw clean verify` 通过，含前端生产构建、转换器单测及 MySQL 集成测试。覆盖重复 callId、不同 attempt、最终文本纠正、越权、过期审批、JWT 到期停止订阅和新令牌重放。 |
+| 真实客户端 | `./scripts/acceptance.mjs --browser --load --restore` 覆盖两轮对话、同键并发提交、冲突请求、分块文本、计划与累计用量。批准、拒绝、放弃、原生审批台决定均按账本重放；原生审批与协议批准并发时仅发布一次，同决定重放返回相同回执，反向决定被拒绝。续接前后的模型调用记录相同。 |
+| 浏览器 | 4 个 Playwright 用例通过。AG-UI 页面刷新后完成原审批，核对回答仅出现一次，并通过浏览器下载 `response.txt` 校验内容。其余用例覆盖原控制台。 |
+| 恢复与负载 | AG-UI 的 135 行账本跨 2 页重放耗时 21 ms。断开客户端并替换 API、Worker 后，原任务在 63.514 秒进入可恢复状态，第二次 attempt 完成，原请求重放得到一个成功终态。原生 SSE 压测为 100 个会话，500/500 条连接完成，提交响应 p95 为 861 ms，用时 32 秒。 |
+| 还原与身份 | 从备份还原平台库、运行时库及产物，在还原会话上继续执行。独立 OIDC issuer 的签名、受众和租户成员检查通过。 |
+
+本轮完成于 2026-11-23。首次运行曾在容器初始化阶段误判 MySQL 已就绪，验收脚本改为通过 TCP 执行探测查询后，建库和独立还原均通过。全量 ESLint 为 0 个错误、12 个既有警告。
+
+发布审批的事件顺序可按以下边界核对。A 从 `RUN_STARTED` 开始，文本结束后依次发 `TOOL_CALL_START → TOOL_CALL_ARGS → TOOL_CALL_END → MESSAGES_SNAPSHOT → STATE_SNAPSHOT → RUN_FINISHED(interrupt)`。B 以新的协议 runId 续接，批准产生 `RUN_STARTED → TOOL_CALL_RESULT → RUN_FINISHED(success)`，拒绝产生 `RUN_STARTED → TOOL_CALL_RESULT → RUN_ERROR(APPROVAL_REJECTED)`。两次交互共享同一平台任务和 toolCallId。批准可下载一份产物，拒绝和放弃均无产物。[协议验收](../web/test/agui-acceptance.mjs) · [浏览器验收](../web/test/agui.spec.ts)
+
 ## 首次源码发布复核（2026-11-22）
 
 从 Git 暂存区导出源码，在独立目录运行 `./mvnw clean verify`。隔离验收首次在等待 Worker 租约恢复的 75 秒窗口超时，完整重跑通过故障恢复、3 个浏览器用例、100 个会话的 500 条 SSE 连接、备份还原和 OIDC 鉴权。并发轮次完成 500 条流，提交响应 p95 为 467 ms。前端生产构建通过，ESLint 返回 0 个错误和 12 个警告。npm audit 报告 6 个中危和 7 个低危问题。Git 导出内容的 Trivy 扫描未发现密钥。

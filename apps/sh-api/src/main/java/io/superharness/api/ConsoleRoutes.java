@@ -8,6 +8,7 @@ class ConsoleRoutes {
     @GetMapping({
         "/chat",
         "/chat/**",
+        "/ag-ui/*",
         "/setup",
         "/schedule",
         "/channel",

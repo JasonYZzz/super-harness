@@ -11,6 +11,8 @@ import java.util.Map;
 public class Errors {
     @ExceptionHandler(Problem.class)
     ResponseEntity<?> problem(Problem e) {
-        return ResponseEntity.status(e.status).body(Map.of("code", e.getMessage()));
+        return ResponseEntity.status(e.status)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(Map.of("code", e.getMessage()));
     }
 }

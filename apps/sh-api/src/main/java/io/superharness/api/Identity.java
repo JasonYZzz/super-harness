@@ -45,6 +45,7 @@ public class Identity {
                                             "/index.html",
                                             "/chat",
                                             "/chat/**",
+                                            "/ag-ui/*",
                                             "/setup",
                                             "/schedule",
                                             "/channel",

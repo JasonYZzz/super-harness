@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { client, until } from "./test-client.mjs";
+import { aguiAcceptance } from "../web/test/agui-acceptance.mjs";
 import { fixtures } from "./acceptance-fixtures.mjs";
 
 const { values: options } = parseArgs({
@@ -88,7 +89,18 @@ async function database() {
   const query = (sql) =>
     command(
       "docker",
-      ["exec", "-e", "MYSQL_PWD", id, "mysql", "-uroot", "-Nse", sql],
+      [
+        "exec",
+        "-e",
+        "MYSQL_PWD",
+        id,
+        "mysql",
+        "--protocol=TCP",
+        "-h127.0.0.1",
+        "-uroot",
+        "-Nse",
+        sql,
+      ],
       { stdio: "ignore" },
     );
   await until(() => {
@@ -240,7 +252,18 @@ async function runSuite() {
   const worker = start("worker", 10000);
   const { agentId } = await api("/agents", { name: "chaos" });
   const echo = { prompt: "test", model: "local-echo" };
-  const runId = await submit(await conversation(agentId, echo), "chaos");
+  const chaosThread = await conversation(agentId, echo);
+  const chaosInput = {
+    threadId: chaosThread,
+    runId: "chaos-interaction",
+    messages: [{ role: "user", id: "chaos-user", content: "chaos" }],
+  };
+  const openInteraction = () =>
+    fetchApi("/api/v1/ag-ui/runs", chaosInput, { Accept: "text/event-stream" });
+  const firstStream = await openInteraction();
+  const runId = (await api("/conversations/" + chaosThread + "/messages"))[0]
+    .runId;
+  await firstStream.body.cancel();
   const uri = "/runs/" + runId;
   await waitStatus(runId, "RUNNING");
   await stop(worker, "SIGKILL");
@@ -265,6 +288,33 @@ async function runSuite() {
   );
   assert.equal(replay.filter((e) => e.type === "run.completed").length, 1);
   assert.equal(replay.at(-1).attempt, 2);
+  const interactionReplay = (await (await openInteraction()).text())
+    .split("\n")
+    .filter((line) => line.startsWith("data: "))
+    .map((line) => JSON.parse(line.slice(6)));
+  assert.equal(
+    interactionReplay.filter((e) => e.type === "RUN_STARTED").length,
+    1,
+  );
+  assert.equal(
+    interactionReplay.filter((e) => e.type === "RUN_FINISHED").length,
+    1,
+  );
+  assert.deepEqual(
+    interactionReplay
+      .filter(
+        (e) => e.name === "harness.run.status" && e.value.status === "started",
+      )
+      .map((e) => e.value.attempt),
+    [1, 2],
+  );
+  assert.equal(
+    interactionReplay
+      .filter((e) => e.type === "TEXT_MESSAGE_CONTENT")
+      .map((e) => e.delta)
+      .join(""),
+    "收到：chaos",
+  );
   console.log(
     "PASS fenced recovery after Worker and API replacement in",
     elapsed,
@@ -374,9 +424,26 @@ async function runSuite() {
   assert.equal(updated?.payload.tasks[0].id,"1");
   assert.equal(updated?.payload.tasks[0].state,"completed");
   console.log("PASS SDK model-produced plan, cross-turn update, stream and durable history");
+  await aguiAcceptance({
+    base: env.SH_API_URL,
+    token: token(),
+    api,
+    conversation,
+    agentId,
+  });
   if (options.browser) {
     const browserPlan = await conversation(agentId, provider);
-    await run("npm", ["test"], { cwd: join(root, "web"), env: {...env, SH_TEST_PLAN_PATH: "/chat/"+agentId+"/"+browserPlan} });
+    await run("npm", ["test"], {
+      cwd: join(root, "web"),
+      env: {
+        ...env,
+        SH_TEST_AGUI_THREAD: await conversation(agentId, {
+          ...echo,
+          outputMode: "APPROVED_ARTIFACT",
+        }),
+        SH_TEST_PLAN_PATH: "/chat/" + agentId + "/" + browserPlan,
+      },
+    });
   }
   if (options.load)
     await run(process.execPath, ["scripts/load.mjs"], {

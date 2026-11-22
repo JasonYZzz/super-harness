@@ -20,7 +20,7 @@ import {
 	X,
 } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { api, createSession, http, signedIn } from '@/api/harness';
@@ -594,6 +594,11 @@ export function ChatViewport({
 													{title}
 												</DropdownMenuCheckboxItem>
 											),
+										)}
+										{sessionId && (
+											<DropdownMenuItem asChild>
+												<Link to={'/ag-ui/' + sessionId}>在 AG-UI 客户端打开</Link>
+											</DropdownMenuItem>
 										)}
 									</DropdownMenuContent>
 								</DropdownMenu>

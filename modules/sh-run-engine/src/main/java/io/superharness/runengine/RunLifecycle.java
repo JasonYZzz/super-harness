@@ -300,12 +300,12 @@ WHERE tenant_id=? AND id=?
                 e.tenant(),
                 e.run(),
                 "tool.requested",
-                Map.of("tool", "publish_text", "version", "1"));
+                Map.of("tool", "publish_text", "version", "1", "toolCallId", tool));
         journal.append(
                 e.tenant(),
                 e.run(),
                 "approval.required",
-                Map.of("approvalId", approval, "argsHash", hash));
+                Map.of("approvalId", approval, "argsHash", hash, "toolCallId", tool));
     }
 
     private void terminal(
@@ -344,6 +344,24 @@ WHERE tenant_id=? AND id=?
 
     public static boolean terminalStatus(Object status) {
         return Set.of("FAILED", "SUCCEEDED", "CANCELLED").contains(status);
+    }
+
+    @Transactional
+    public void cancelApproval(Principal p, UUID run, UUID approval) {
+        var row = lock(p.tenant(), run);
+        if (!p.user().equals(row.get("requested_by"))) throw Problem.missing();
+        if (terminalStatus(row.get("status"))) return;
+        if (!"WAITING_APPROVAL".equals(row.get("status"))
+                || sql.first(
+                                """
+                                SELECT id FROM approvals WHERE tenant_id=? AND run_id=? AND id=? AND status='PENDING'
+                                AND expires_at>UTC_TIMESTAMP(6) FOR UPDATE
+                                """,
+                                p.tenant(),
+                                run,
+                                approval)
+                        .isEmpty()) throw new Problem(409, "APPROVAL_CLOSED");
+        cancel(p, run);
     }
 
     @Transactional
