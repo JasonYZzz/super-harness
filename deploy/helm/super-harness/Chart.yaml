@@ -1,0 +1,6 @@
+apiVersion: v2
+name: super-harness
+description: AgentScope execution platform with an external MySQL primary
+version: 0.1.0
+appVersion: "0.1.0"
+type: application

@@ -1,0 +1,26 @@
+# IDE and operating system files
+.idea/
+*.iml
+.DS_Store
+
+# Developer services, secrets and local overrides
+.local/
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+*.key
+*.p12
+*.pfx
+*.log
+
+# Build, dependency and test output
+target/
+node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/
+/web/coverage/
+*.tsbuildinfo

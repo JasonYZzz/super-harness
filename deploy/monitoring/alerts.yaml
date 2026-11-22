@@ -1,0 +1,15 @@
+groups:
+  - name: super-harness
+    rules:
+      - alert: HarnessRecoveryRequired
+        expr: max(harness_runs{status="RECOVERY_REQUIRED"}) > 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: Inspect the affected attempt and its tool receipts before resuming
+      - alert: HarnessQueueBacklog
+        expr: max(harness_runs{status="QUEUED"}) > 50
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: Inspect worker capacity and configured runtime store profile

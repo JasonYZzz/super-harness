@@ -1,0 +1,52 @@
+name: verify
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: ./mvnw -B clean verify
+      - run: docker build -f deploy/sandbox/Dockerfile -t super-harness-sandbox:local .
+      - name: Runtime storage and sandbox contracts
+        env:
+          SH_SANDBOX_IMAGE: super-harness-sandbox:local
+        run: ./mvnw -B -pl modules/sh-runtime-agentscope -am test -Dtest=SandboxIT,AlternativeStoresIT -Dsurefire.failIfNoSpecifiedTests=false
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: scripts/acceptance.mjs --browser --load --restore
+      - run: helm lint deploy/helm/super-harness && helm template ci deploy/helm/super-harness >/dev/null
+      - name: Scan frontend dependencies
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=high
+        working-directory: web
+      - name: Create SBOM
+        run: ./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.8.2:makeAggregateBom -DoutputFormat=json
+      - name: Scan Java dependencies, source secrets and deployment settings
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          curl --fail --location --retry 3 https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz --output "$archive"
+          echo "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf  $archive" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xzf "$archive" trivy
+          "$RUNNER_TEMP/trivy" sbom --exit-code 1 --severity HIGH,CRITICAL target/bom.json
+          "$RUNNER_TEMP/trivy" fs --scanners secret --skip-dirs web/node_modules --skip-dirs target --exit-code 1 --severity HIGH,CRITICAL .
+          "$RUNNER_TEMP/trivy" config --exit-code 1 --severity HIGH,CRITICAL deploy
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification
+          path: |
+            target/bom.json
+            **/target/surefire-reports/TEST-*.xml

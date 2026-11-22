@@ -1,0 +1,5 @@
+**
+!apps
+!apps/sh-*
+!apps/sh-*/target
+!apps/sh-*/target/sh-*.jar

@@ -1,0 +1,28 @@
+imagePrefix: super-harness
+tag: "0.1.0"
+imagePullPolicy: IfNotPresent
+roles:
+  api:
+    replicas: 2
+    secret: harness-api
+  worker:
+    replicas: 2
+    secret: harness-worker
+  reconciler:
+    replicas: 1
+    secret: harness-reconciler
+environment:
+  MYSQL_PORT: "3306"
+  MYSQL_DATABASE: super_harness
+  AGENTSCOPE_MYSQL_DATABASE: super_harness_runtime
+  SH_STORE_PROFILE: jdbc-mysql
+  SH_STORE_VERSION: "1"
+  SH_WORKSPACE_ROOT: /tmp/harness/workspaces
+  SH_ALLOWED_MODELS: local-echo
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi

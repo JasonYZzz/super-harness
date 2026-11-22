@@ -1,0 +1,62 @@
+spring:
+  datasource:
+    url: 'jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:super_harness}?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true'
+    username: ${MYSQL_USER}
+    password: ${MYSQL_PASSWORD}
+    hikari:
+      transaction-isolation: TRANSACTION_READ_COMMITTED
+  flyway:
+    clean-disabled: true
+    validate-on-migrate: true
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  threads:
+    virtual:
+      enabled: true
+  mvc:
+    async:
+      request-timeout: 3600000
+
+server:
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  tracing:
+    enabled: ${SH_TRACING_ENABLED:false}
+    export:
+      otlp:
+        enabled: ${SH_TRACING_ENABLED:false}
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${SH_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+  otlp:
+    metrics:
+      export:
+        enabled: false
+
+springdoc:
+  paths-to-match: /api/v1/**
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+
+server:
+  address: 127.0.0.1
+
+sh:
+  models:
+    allowed:
+      - token-plan:qwen4-max
+      - token-plan:deepseek-v4.1-flash-1017
+      - local-echo
+    default-model: token-plan:qwen4-max
