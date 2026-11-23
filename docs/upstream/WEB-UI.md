@@ -1,6 +1,6 @@
 # AgentScope Web UI 对照核查
 
-下文记录升级前的 UI 对照。当前登录、频道、规划、委派、Skill 与记忆的实现和验收见 [SDK 与 Harness 审计](SDK-HARNESS.md)。
+下文记录升级前的 UI 对照。当前聊天页面的发送、订阅与审批入口见[前端交互协议](../ag-ui.md)。当前登录、频道、规划、委派、Skill 与记忆的实现和验收见 [SDK 与 Harness 审计](SDK-HARNESS.md)。
 
 界面基线是本机下载的 `agentscope-main/examples/web_ui/frontend`。2026-11-21 逐文件比对了 `src` 下全部 229 个源文件，项目包含全部文件，其中 197 个逐字节相同。侧栏组件、侧栏 SVG、标签页图标、全局样式、计划和团队面板都直接复用本地版本。其余差异集中在 Java 登录、资源适配、聊天状态、对话框和能力提示。[上游前端](https://github.com/agentscope-ai/agentscope/tree/main/examples/web_ui/frontend) · [许可证](../../web/public/LICENSE-agentscope.txt)
 
@@ -28,11 +28,11 @@
 | 频道 | `/channels/`、`/channels/types` | 原版页面，尚无外部平台绑定或消息投递 |
 | 凭证 | `/credential/`、`/credential/schemas` | 原版页面提示凭证由服务端配置。聊天顶部从 Java 读取租户允许的模型，支持切换主模型。供应商凭证 CRUD、备用模型、逐模型参数待接入 |
 | MCP 中心 | `/hub/mcp`、`/mcp` | 「我的」显示本租户配置的 MCP 及允许的工具，服务地址与密钥引用保存在服务端。外部 Hub 安装和工作区动态注册待接入 |
-| 技能中心 | `/hub/skill`、`/skill` | 原版列表、搜索、详情与撤销读取 Java 技能版本。「管理技能版本」保留发布入口。外部 Hub 安装和会话内文件夹上传待接入 |
+| 技能中心 | `/hub/skill`、`/skill` | 租户技能库支持搜索、详情、引用修订查询与撤销确认。「管理技能版本」支持手工发布及导入 SKILL.md 和 references/ 文本目录。外部 Hub 安装和会话内覆盖待接入 |
 | 知识库 | `/knowledge_bases/`、分块和嵌入模型 | 原版知识库页面可访问。个人记忆有单独的管理入口。文档集合、索引与检索待接入 |
 | 语音配置 | `/voice-profile/`、可用引擎 | 原版页面，尚无实时语音、音色、ASR 或 TTS 执行协议 |
 
-完整行为一致性尚未通过。其余协议差异包括运行中输入的排队、排序和插入，会话内 Git 与目录操作，以及图片、音频和二进制附件。Java 额外提供发布版本固定、幂等运行、租户审批和故障恢复。上述差异在验收时分别记录。[Java 请求适配](../../web/src/api/harness.ts) · [历史与 SSE](../../web/src/hooks/useHarnessChat.ts) · [计划工具](../../modules/sh-runtime-agentscope/src/main/java/io/superharness/runtime/PlanTools.java)
+完整行为一致性尚未通过。其余协议差异包括运行中输入的排队、排序和插入，会话内 Git 与目录操作，以及图片、音频和二进制附件。Java 额外提供发布版本固定、幂等运行、租户审批和故障恢复。上述差异在验收时分别记录。[Java 请求适配](../../web/src/api/harness.ts) · [历史与 SSE](../../web/src/hooks/useAguiThread.ts) · [计划工具](../../modules/sh-runtime-agentscope/src/main/java/io/superharness/runtime/PlanTools.java)
 
 ## 复验
 

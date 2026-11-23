@@ -1,5 +1,7 @@
 package io.superharness.api;
 
+import io.agentscope.core.skill.util.MarkdownSkillParser;
+import io.superharness.domain.Problem;
 import io.superharness.persistence.Knowledge;
 
 import jakarta.validation.Valid;
@@ -21,9 +23,11 @@ class KnowledgeApi {
     }
 
     record Skill(
-            @NotBlank @Size(max = 120) String name,
+            @Size(max = 120) String name,
             @NotBlank @Size(max = 80) String version,
-            @NotBlank @Size(max = 8000) String content) {}
+            @NotBlank @Size(max = 8000) String content,
+            @Size(max = 1024) String description,
+            @Size(max = 16) Map<@NotNull @Size(max = 240) String, @NotNull @Size(max = 65536) String> resources) {}
 
     record Memory(@NotBlank @Size(max = 2000) String text) {}
 
@@ -39,9 +43,26 @@ class KnowledgeApi {
 
     @PostMapping("/skills")
     Object publish(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody Skill s) {
-        return Map.of(
-                "id",
-                knowledge.publish(Identity.principal(jwt), s.name(), s.version(), s.content()));
+        String name = s.name();
+        String description = s.description();
+        var parsed = MarkdownSkillParser.parse(s.content());
+        if (parsed.hasFrontmatter()) {
+            var metadata = parsed.getMetadata();
+            if (!(metadata.get("name") instanceof String declaredName)
+                    || !(metadata.get("description") instanceof String purpose) || purpose.isBlank()
+                    || parsed.getContent().isBlank()
+                    || (name != null && !name.isBlank() && !name.equals(declaredName)))
+                throw new Problem(400, "INVALID_SKILL_DOCUMENT");
+            name = declaredName;
+            description = purpose;
+        }
+        if (name == null || name.isBlank() || name.length() > 120)
+            throw new Problem(400, "INVALID_SKILL_NAME");
+        if (description == null || description.isBlank()) description = name + " (" + s.version() + ")";
+        if (description.length() > 1024)
+            throw new Problem(400, "INVALID_SKILL_DESCRIPTION");
+        return Map.of("id", knowledge.publish(Identity.principal(jwt), name, s.version(),
+                s.content(), description, s.resources() == null ? Map.of() : s.resources()));
     }
 
     @DeleteMapping("/skills/{id}")

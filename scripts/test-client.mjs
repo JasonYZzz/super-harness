@@ -1,4 +1,5 @@
 // Shared client for development and isolated release tests.
+import { submitTurn, readThread, publishDecision } from "../web/test/agui-client.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -44,15 +45,9 @@ export function client(base, token) {
     return (await api("/conversations", { agentId, agentRevisionId }))
       .conversationId;
   }
-  async function submit(conversationId, text, key = randomUUID()) {
-    return (
-      await api(
-        "/runs",
-        { conversationId, input: { text, type: "text" } },
-        { "Idempotency-Key": key },
-      )
-    ).runId;
-  }
+  const submit = (thread, text, runId = randomUUID()) => submitTurn(base, token, thread, text, runId);
+  const decide = (approval, approved) => publishDecision(base, token, approval, approved);
+  const snapshot = (thread) => readThread(base, token, thread);
   async function waitStatus(run, expected, seconds) {
     await until(async () => {
       const { status } = await api("/runs/" + run);
@@ -75,5 +70,5 @@ export function client(base, token) {
       .filter((line) => line.startsWith("data: "))
       .map((line) => JSON.parse(line.slice(6)));
   }
-  return { api, fetchApi, conversation, submit, waitStatus, events };
+  return { api, fetchApi, conversation, submit, snapshot, decide, waitStatus, events };
 }

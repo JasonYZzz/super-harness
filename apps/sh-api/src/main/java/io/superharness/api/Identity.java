@@ -1,5 +1,10 @@
 package io.superharness.api;
 
+import static org.springframework.security.authorization.AuthenticatedAuthorizationManager.authenticated;
+import static org.springframework.security.authorization.AuthorityAuthorizationManager.hasAuthority;
+import static org.springframework.security.authorization.AuthorizationManagers.allOf;
+import static org.springframework.security.authorization.AuthorizationManagers.not;
+
 import io.superharness.domain.*;
 
 import org.springframework.context.annotation.*;
@@ -17,6 +22,8 @@ import javax.crypto.spec.SecretKeySpec;
 
 @Configuration
 public class Identity {
+    private static final String METRICS_AUTHORITY = "SCOPE_metrics.read";
+
     static Principal principal(Jwt jwt) {
         try {
             return new Principal(jwt.getClaimAsString("tenant_id"), jwt.getSubject());
@@ -45,7 +52,6 @@ public class Identity {
                                             "/index.html",
                                             "/chat",
                                             "/chat/**",
-                                            "/ag-ui/*",
                                             "/setup",
                                             "/schedule",
                                             "/channel",
@@ -67,10 +73,10 @@ public class Identity {
                                             "/error")
                                     .permitAll()
                                     .requestMatchers("/actuator/prometheus")
-                                    .hasAuthority("SCOPE_metrics.read")
+                                    .hasAuthority(METRICS_AUTHORITY)
                                     .requestMatchers(
                                             "/api/v1/**", "/v3/api-docs", "/v3/api-docs.yaml")
-                                    .authenticated()
+                                    .access(allOf(authenticated(), not(hasAuthority(METRICS_AUTHORITY))))
                                     .anyRequest()
                                     .denyAll();
                         })

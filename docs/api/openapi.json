@@ -195,153 +195,12 @@
         }
       }
     },
-    "/api/v1/runs": {
-      "get": {
-        "tags": [
-          "run-api"
-        ],
-        "operationId": "list",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "*/*": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "run-api"
-        ],
-        "summary": "Submit an idempotent run on a pinned conversation",
-        "operationId": "submit",
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RunInput"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "Accepted or previously accepted request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Accepted"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflicting key, revision or revoked skill",
-            "content": {
-              "*/*": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Tenant admission quota exceeded",
-            "content": {
-              "*/*": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/runs/{id}/resume": {
-      "post": {
-        "tags": [
-          "run-stream"
-        ],
-        "operationId": "resume",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "*/*": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/runs/{id}/cancel": {
-      "post": {
-        "tags": [
-          "run-stream"
-        ],
-        "operationId": "cancel",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "*/*": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/memory": {
       "get": {
         "tags": [
           "knowledge-api"
         ],
-        "operationId": "list_1",
+        "operationId": "list",
         "responses": {
           "200": {
             "description": "OK",
@@ -504,40 +363,6 @@
         "security": []
       }
     },
-    "/api/v1/approvals/{id}/decision": {
-      "post": {
-        "tags": [
-          "approval-api"
-        ],
-        "operationId": "decide",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Decision"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK"
-          }
-        }
-      }
-    },
     "/api/v1/agents": {
       "get": {
         "tags": [
@@ -649,6 +474,169 @@
               "*/*": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ag-ui/runs": {
+      "post": {
+        "tags": [
+          "agui-api"
+        ],
+        "summary": "Execute or replay a durable AG-UI interaction",
+        "description": "Submit text, resume an interrupt, or use a Harness extension (harness.snapshot, harness.observe, harness.cancel, harness.recover). Repeating the original input replays the complete interaction.",
+        "operationId": "run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AguiInput"
+              },
+              "examples": {
+                "Read thread": {
+                  "description": "Read thread",
+                  "value": {
+                    "threadId": "11111111-1111-4111-8111-111111111111",
+                    "runId": "read-1",
+                    "messages": [],
+                    "forwardedProps": {
+                      "harness.snapshot": {}
+                    }
+                  }
+                },
+                "Observe task": {
+                  "description": "Observe task",
+                  "value": {
+                    "threadId": "11111111-1111-4111-8111-111111111111",
+                    "runId": "observe-1",
+                    "messages": [],
+                    "forwardedProps": {
+                      "harness.observe": "33333333-3333-4333-8333-333333333333"
+                    }
+                  }
+                },
+                "Text turn": {
+                  "description": "Text turn",
+                  "value": {
+                    "threadId": "11111111-1111-4111-8111-111111111111",
+                    "runId": "turn-1",
+                    "messages": [
+                      {
+                        "id": "input-1",
+                        "role": "user",
+                        "content": "整理发布步骤"
+                      }
+                    ]
+                  }
+                },
+                "Approve publication": {
+                  "description": "Approve publication",
+                  "value": {
+                    "threadId": "11111111-1111-4111-8111-111111111111",
+                    "runId": "decision-1",
+                    "messages": [],
+                    "resume": [
+                      {
+                        "interruptId": "22222222-2222-4222-8222-222222222222",
+                        "status": "resolved",
+                        "payload": {
+                          "approved": true,
+                          "argsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "AG-UI events through the first interrupt or terminal outcome",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Membership or approval permission required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Conversation unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflicting idempotent submission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admission quota exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    }
+                  }
                 }
               }
             }
@@ -891,6 +879,26 @@
         }
       }
     },
+    "/api/v1/runs": {
+      "get": {
+        "tags": [
+          "run-api"
+        ],
+        "operationId": "list_1",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runs/{id}": {
       "get": {
         "tags": [
@@ -1055,37 +1063,6 @@
         }
       }
     },
-    "/api/v1/conversations/{id}/messages": {
-      "get": {
-        "tags": [
-          "run-api"
-        ],
-        "operationId": "messages",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "*/*": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/channels/http/threads": {
       "get": {
         "tags": [
@@ -1205,147 +1182,6 @@
           }
         }
       }
-    },
-    "/api/v1/ag-ui/runs": {
-      "post": {
-        "tags": [
-          "agui-api"
-        ],
-        "summary": "Execute or replay a durable AG-UI interaction",
-        "description": "Submit one user text message or resume a publish_text interrupt. Repeating the original input replays the complete interaction.",
-        "operationId": "run",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AguiInput"
-              },
-              "examples": {
-                "Text turn": {
-                  "description": "Text turn",
-                  "value": {
-                    "threadId": "11111111-1111-4111-8111-111111111111",
-                    "runId": "turn-1",
-                    "messages": [
-                      {
-                        "id": "input-1",
-                        "role": "user",
-                        "content": "整理发布步骤"
-                      }
-                    ]
-                  }
-                },
-                "Approve publication": {
-                  "description": "Approve publication",
-                  "value": {
-                    "threadId": "11111111-1111-4111-8111-111111111111",
-                    "runId": "decision-1",
-                    "messages": [],
-                    "resume": [
-                      {
-                        "interruptId": "22222222-2222-4222-8222-222222222222",
-                        "status": "resolved",
-                        "payload": {
-                          "approved": true,
-                          "argsHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        }
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "AG-UI events through the first interrupt or terminal outcome",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid or unsupported input",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Membership or approval permission required",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Conversation unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflicting idempotent submission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Admission quota exceeded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -1442,116 +1278,23 @@
             "type": "string",
             "maxLength": 8000,
             "minLength": 0
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 0
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": [
           "content",
-          "name",
           "version"
         ]
-      },
-      "Input": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "pattern": "text"
-          },
-          "text": {
-            "type": "string",
-            "maxLength": 32000,
-            "minLength": 0
-          }
-        },
-        "required": [
-          "text",
-          "type"
-        ]
-      },
-      "Options": {
-        "type": "object",
-        "properties": {
-          "interactive": {
-            "type": "boolean"
-          },
-          "timeoutSeconds": {
-            "type": "integer",
-            "format": "int32",
-            "maximum": 3600,
-            "minimum": 1
-          }
-        }
-      },
-      "RunInput": {
-        "type": "object",
-        "properties": {
-          "conversationId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "agentId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "agentRevisionId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "input": {
-            "$ref": "#/components/schemas/Input"
-          },
-          "options": {
-            "$ref": "#/components/schemas/Options"
-          }
-        },
-        "required": [
-          "conversationId",
-          "input"
-        ]
-      },
-      "Accepted": {
-        "type": "object",
-        "properties": {
-          "runId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "conversationId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "agentRevisionId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "status": {
-            "type": "string"
-          },
-          "attempt": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "lastSeq": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "cancelRequested": {
-            "type": "boolean"
-          },
-          "errorCode": {
-            "type": "string"
-          },
-          "acceptedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "statusUrl": {
-            "type": "string"
-          },
-          "eventsUrl": {
-            "type": "string"
-          }
-        }
       },
       "Memory": {
         "type": "object",
@@ -1635,22 +1378,6 @@
           }
         }
       },
-      "Decision": {
-        "type": "object",
-        "properties": {
-          "approve": {
-            "type": "boolean"
-          },
-          "argsHash": {
-            "type": "string",
-            "pattern": "[a-f0-9]{64}"
-          }
-        },
-        "required": [
-          "approve",
-          "argsHash"
-        ]
-      },
       "Agent": {
         "type": "object",
         "properties": {
@@ -1707,20 +1434,6 @@
           "prompt"
         ]
       },
-      "ConversationName": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 160,
-            "minLength": 0
-          }
-        },
-        "required": [
-          "name"
-        ]
-      },
-      "StreamingResponseBody": {},
       "AguiInput": {
         "type": "object",
         "properties": {
@@ -1765,7 +1478,21 @@
             "type": "string"
           }
         }
-      }
+      },
+      "ConversationName": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 0
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "StreamingResponseBody": {}
     },
     "securitySchemes": {
       "bearer": {

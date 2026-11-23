@@ -62,7 +62,7 @@
 		"mine": "Mine",
 		"my-mcp": "Installed MCPs",
 		"skill-hub": "Skill Hub",
-		"my-skill": "Installed skills",
+		"my-skill": "Tenant skill library",
 		"message": "Message",
 		"llm": "LLM",
 		"tts": "TTS",
@@ -1018,17 +1018,17 @@
 		"retry": "Retry"
 	},
 	"skill": {
-		"subtitle": "Browse and install skills",
+		"subtitle": "Browse published skill versions",
 		"hubsLabel": "Hubs",
 		"searchPlaceholder": "Search this hub",
-		"mineSearchPlaceholder": "Search your skills",
+		"mineSearchPlaceholder": "Search tenant skills",
 		"noHubsTitle": "No hubs available",
 		"noHubsDescription": "Ask your administrator to add one.",
 		"noCardsTitle": "Nothing found",
 		"noCardsDescription": "Try a different keyword.",
-		"mineDescription": "The skills you have installed",
+		"mineDescription": "Versions available to agent revisions in this tenant",
 		"mineEmptyTitle": "No skills yet",
-		"mineEmptyDescription": "Install one from a hub on the left.",
+		"mineEmptyDescription": "Publish the first version in Manage skill versions.",
 		"install": "Install",
 		"installed": "Installed",
 		"versionLabel": "Version",
@@ -1043,7 +1043,9 @@
 		"noReadme": "This skill ships no SKILL.md body.",
 		"loadFailedTitle": "Couldn't reach the server",
 		"loadFailedDescription": "Check the server URL and that the service is running.",
-		"retry": "Retry"
+		"retry": "Retry",
+		"revoke": "Revoke version",
+		"confirmRevoke": "Revoke {{name}} ({{version}})? Referencing revisions: {{revisions}}. New runs on these revisions will be blocked. Queued and running jobs keep their pinned version."
 	},
 	"agent-menu": {
 		"settings": "Settings",

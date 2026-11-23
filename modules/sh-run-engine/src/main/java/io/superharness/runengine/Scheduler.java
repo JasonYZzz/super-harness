@@ -74,19 +74,20 @@ WHERE r.tenant_id=? AND r.id=? AND r.status='QUEUED'
         if (admitted == 0) return Optional.empty();
         journal.append(tenant, id, "run.claimed", Map.of());
         var config = sql.parse(r.get("config"));
-        StringBuilder prompt = new StringBuilder(r.get("prompt").toString());
         var skills = new ArrayList<AgentRuntime.PinnedSkill>();
         for (var skill : config.path("skills")) {
+            var resources = new LinkedHashMap<String, String>();
+            for (var entry : skill.path("resources").properties()) {
+                resources.put(entry.getKey(), entry.getValue().asText());
+            }
             skills.add(
                     new AgentRuntime.PinnedSkill(
                             UUID.fromString(skill.path("id").asText()),
                             skill.path("name").asText(),
                             skill.path("version").asText(),
-                            skill.path("content").asText()));
-            prompt.append("\n\n")
-                    .append(skill.path("name").asText())
-                    .append("\n")
-                    .append(skill.path("content").asText());
+                            skill.path("content").asText(),
+                            skill.path("description").asText(null),
+                            resources));
         }
         String input = sql.parse(r.get("input_json")).path("text").asText();
         if (config.path("useMemory").asBoolean()) {
@@ -121,7 +122,7 @@ WHERE r.tenant_id=? AND r.id=? AND r.status='QUEUED'
                                 conv,
                                 slot,
                                 Sql.uuid(r.get("state_slot")),
-                                prompt.toString(),
+                                r.get("prompt").toString(),
                                 (String) r.get("model"),
                                 input,
                                 config.path("sandbox").asBoolean(),

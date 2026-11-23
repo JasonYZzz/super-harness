@@ -356,27 +356,6 @@ export function getEnabledClientExternalToolNames(
 	return stored.filter((name) => availableNames.has(name));
 }
 
-export function getEnabledClientExternalToolDefinitions(
-	agentId: string,
-	sessionId: string,
-	state: ClientExternalToolStoreState = snapshot,
-): ClientExternalToolDefinition[] {
-	const definitions = state.customTools.map((tool) => tool.definition);
-	const byName = new Map(definitions.map((definition) => [definition.name, definition]));
-	return getEnabledClientExternalToolNames(agentId, sessionId, state)
-		.map((name) => byName.get(name))
-		.filter((definition): definition is ClientExternalToolDefinition => Boolean(definition));
-}
-
-export function getEnabledClientBuiltinTools(
-	agentId: string,
-	sessionId: string,
-	state: ClientExternalToolStoreState = snapshot,
-): Array<(typeof CLIENT_BUILTIN_TOOL_NAMES)[number]> {
-	const enabled = new Set(getEnabledClientExternalToolNames(agentId, sessionId, state));
-	return CLIENT_BUILTIN_TOOL_NAMES.filter((name) => enabled.has(name));
-}
-
 export function setClientExternalToolEnabled(
 	agentId: string,
 	sessionId: string,

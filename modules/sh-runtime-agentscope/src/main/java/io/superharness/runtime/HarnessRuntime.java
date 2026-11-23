@@ -4,6 +4,8 @@ import io.agentscope.core.agent.*;
 import io.agentscope.core.event.*;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.state.*;
+import io.agentscope.core.skill.util.MarkdownSkillParser;
+import io.agentscope.core.skill.util.SkillUtil;
 import io.agentscope.harness.agent.*;
 import io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec;
 import io.superharness.runtimespi.AgentRuntime;
@@ -92,6 +94,32 @@ public class HarnessRuntime implements AgentRuntime {
         return item;
     }
 
+    private static void writePinnedSkill(Path workspace, PinnedSkill skill) throws IOException {
+        // SDK directories use the immutable version UUID. Display names never become paths.
+        String name = "skill-" + skill.id();
+        Path dir = Files.createDirectories(workspace.resolve("skills").resolve(name));
+        var metadata = new LinkedHashMap<String, Object>();
+        String body = skill.content();
+        if (skill.description() != null) {
+            var parsed = MarkdownSkillParser.parse(body);
+            if (parsed.hasFrontmatter()) {
+                metadata.putAll(parsed.getMetadata());
+                body = parsed.getContent();
+            }
+        }
+        metadata.put("name", name);
+        String label = skill.name() + " (" + skill.version() + ")";
+        String purpose = skill.description();
+        metadata.put("description", purpose == null || purpose.equals(label) ? label : label + " — " + purpose);
+        Files.writeString(dir.resolve("SKILL.md"),
+                MarkdownSkillParser.generate(metadata, body));
+        for (var resource : skill.resources().entrySet()) {
+            var file = SkillUtil.resolveContainedPath(dir, resource.getKey()).orElseThrow();
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, resource.getValue());
+        }
+    }
+
     @Override
     public Handle prepare(Turn turn, io.superharness.runtimespi.RuntimeMeter meter) {
         String user = turn.conversation().toString(), session = turn.slot().toString();
@@ -129,20 +157,7 @@ public class HarnessRuntime implements AgentRuntime {
         try {
             Files.createDirectories(workspace);
             for (var skill : turn.skills()) {
-                // SDK directories use the immutable version UUID. Display names never become paths.
-                String name = "skill-" + skill.id();
-                Path dir = Files.createDirectories(workspace.resolve("skills").resolve(name));
-                String description =
-                        io.agentscope.core.util.JsonUtils.getJsonCodec()
-                                .toJson(skill.name() + " (" + skill.version() + ")");
-                Files.writeString(
-                        dir.resolve("SKILL.md"),
-                        "---\nname: "
-                                + name
-                                + "\ndescription: "
-                                + description
-                                + "\n---\n"
-                                + skill.content());
+                writePinnedSkill(workspace, skill);
             }
         } catch (IOException e) {
             throw new IllegalStateException("Workspace unavailable", e);

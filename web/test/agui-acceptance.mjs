@@ -1,4 +1,5 @@
 // Run by scripts/acceptance.mjs against its disposable API, Worker and MySQL.
+import { readThread } from './agui-client.mjs';
 import { HttpAgent } from '@ag-ui/client';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -32,7 +33,7 @@ export async function aguiAcceptance({ base, token, api, conversation, agentId }
 	const [one, two] = await Promise.all([frames(input), frames(input)]);
 	assert.deepEqual(one, two);
 	assert.equal(one.at(-1).outcome.type, 'success');
-	assert.equal((await api('/conversations/' + threadId + '/messages')).length, 1);
+	assert.equal((await readThread(base, token, threadId)).turns.length, 1);
 	assert.equal(
 		(await post({ ...input, messages: [{ ...input.messages[0], content: 'conflict' }] })).status,
 		409,
@@ -59,12 +60,50 @@ export async function aguiAcceptance({ base, token, api, conversation, agentId }
 	]) {
 		assert.equal((await post({ ...input, ...extra })).status, 400);
 	}
+	for (const forwardedProps of [
+		{ unknown: {} },
+		{ 'harness.snapshot': { since: 'invalid' } },
+		{ 'harness.observe': 'invalid' },
+		{ 'harness.snapshot': {}, 'harness.observe': randomUUID() },
+	]) {
+		assert.equal(
+			(await post({ threadId, runId: randomUUID(), messages: [], forwardedProps })).status,
+			400,
+		);
+	}
 	const agent = new HttpAgent({ url, threadId, headers, initialMessages: input.messages });
 	await agent.runAgent({ runId: input.runId });
 	agent.addMessage({ role: 'user', id: randomUUID(), content: '第二轮' });
 	await agent.runAgent({ runId: randomUUID() });
 	assert.match(agent.messages.at(-1).content, /第二轮/);
 
+	// Spring Security denies unmapped console URLs before MVC routing.
+	const retiredPage = await fetch(base + '/ag-ui/' + threadId, { headers });
+	assert.equal(retiredPage.status, 403);
+	for (const [method, path] of [
+		['GET', '/api/v1/ag-ui/threads/' + threadId],
+		['POST', '/api/v1/ag-ui/threads/' + threadId + '/runs/' + randomUUID() + '/connect'],
+		['POST', '/api/v1/runs'],
+		['POST', '/api/v1/runs/' + randomUUID() + '/cancel'],
+		['POST', '/api/v1/runs/' + randomUUID() + '/resume'],
+		['POST', '/api/v1/approvals/' + randomUUID() + '/decision'],
+		['GET', '/api/v1/conversations/' + threadId + '/messages'],
+	]) {
+		const removed = await fetch(base + path, { method, headers });
+		assert.ok([404, 405].includes(removed.status), method + ' ' + path + ': ' + removed.status);
+	}
+	// Cancelling a completed task acknowledges the operation without creating another task.
+	const completedTask = (await readThread(base, token, threadId)).turns.at(-1).runId;
+	const stop = {
+		threadId,
+		runId: randomUUID(),
+		messages: [],
+		forwardedProps: { 'harness.cancel': completedTask },
+	};
+	assert.deepEqual((await frames(stop)).at(-1).result, { taskId: completedTask });
+	const controller = new HttpAgent({ url, threadId, headers });
+	const controlAck = await controller.runAgent({ forwardedProps: stop.forwardedProps });
+	assert.equal(controlAck.result.taskId, completedTask);
 	const plan = await conversation(agentId, { prompt: 'test', model: 'openai:fixture' });
 	const planning = {
 		threadId: plan,
@@ -98,6 +137,22 @@ export async function aguiAcceptance({ base, token, api, conversation, agentId }
 		const status = async () => (await api('/runs/' + run)).status;
 		assert.equal(await status(), 'WAITING_APPROVAL');
 		assert.equal((await frames({ ...a, runId: randomUUID() })).at(-1).code, 'INTERRUPT_PENDING');
+		const snapshotOf = (since) => readThread(base, token, publish, since);
+		const snapshot = await snapshotOf();
+		assert.deepEqual(snapshot.interrupts, [interrupt]);
+		assert.equal(snapshot.turns.at(-1).interactionId, a.runId);
+		assert.equal(snapshot.capabilities.humanInTheLoop.interrupts, true);
+		assert.deepEqual(
+			snapshot.messages,
+			before.findLast((e) => e.type === 'MESSAGES_SNAPSHOT').messages,
+		);
+		assert.equal((await snapshotOf(snapshot.cursor)).unchanged, true);
+		const reader = new HttpAgent({ url, threadId: publish, headers });
+		const forwardedProps = { 'harness.observe': run };
+		await reader.runAgent({ forwardedProps });
+		assert.deepEqual(reader.messages, snapshot.messages);
+		assert.equal((await post({ threadId, runId: randomUUID(), forwardedProps })).status, 404);
+		assert.equal((await post({ ...a, forwardedProps })).status, 400);
 		const decision = { approved: mode === 'approve', argsHash: interrupt.metadata.argsHash };
 		const b = {
 			threadId: publish,
@@ -121,23 +176,15 @@ export async function aguiAcceptance({ base, token, api, conversation, agentId }
 		);
 		if (mode === 'cancel') b.resume = [{ interruptId: interrupt.id, status: 'cancelled' }];
 		if (mode === 'external') {
-			await api('/approvals/' + interrupt.id + '/decision', {
-				approve: true,
-				argsHash: decision.argsHash,
-			});
 			decision.approved = true;
+			await frames({ ...b, runId: randomUUID() });
 		}
 		assert.equal((await frames({ ...b, threadId })).at(-1).code, 'INVALID_INTERRUPT');
 		const callsBefore = (await api('/runs/' + run + '/trace')).modelCalls;
 		const [result, repeated] = await Promise.all([
 			frames(b),
 			frames(b),
-			mode === 'approve'
-				? api('/approvals/' + interrupt.id + '/decision', {
-						approve: true,
-						argsHash: decision.argsHash,
-					})
-				: undefined,
+			mode === 'approve' ? frames({ ...b, runId: randomUUID() }) : undefined,
 		]);
 		assert.deepEqual((await api('/runs/' + run + '/trace')).modelCalls, callsBefore);
 		assert.deepEqual(result, repeated);
@@ -154,7 +201,16 @@ export async function aguiAcceptance({ base, token, api, conversation, agentId }
 			};
 			assert.equal((await frames(conflict)).at(-1).code, 'APPROVAL_CLOSED');
 		}
+		const closed = await snapshotOf(snapshot.cursor);
+		assert.deepEqual(closed.interrupts, []);
+		const receipts = closed.messages.filter(
+			(m) => m.role === 'tool' && m.toolCallId === interrupt.toolCallId,
+		);
+		assert.equal(receipts.length, 1);
+		assert.equal(receipts[0].content, result.find((e) => e.type === 'TOOL_CALL_RESULT').content);
 		const published = mode === 'approve' || mode === 'external';
+		if (!published)
+			assert.deepEqual(result.findLast((e) => e.type === 'STATE_SNAPSHOT')?.snapshot, closed.state);
 		assert.equal(
 			await status(),
 			published ? 'SUCCEEDED' : mode === 'cancel' ? 'CANCELLED' : 'FAILED',
@@ -162,6 +218,23 @@ export async function aguiAcceptance({ base, token, api, conversation, agentId }
 		assert.equal(result.at(-1).type, published ? 'RUN_FINISHED' : 'RUN_ERROR');
 		assert.equal((await api('/runs/' + run + '/artifacts')).length, published ? 1 : 0);
 	}
+	const parked = await frames({
+		threadId: publish,
+		runId: randomUUID(),
+		messages: [{ id: randomUUID(), role: 'user', content: 'cancel platform task' }],
+	});
+	const taskId = parked.find((e) => e.name === 'harness.run.status').value.runId;
+	const cancel = {
+		threadId: publish,
+		runId: randomUUID(),
+		messages: [],
+		forwardedProps: { 'harness.cancel': taskId },
+	};
+	assert.equal((await post({ ...cancel, threadId })).status, 404);
+	const ack = await frames(cancel);
+	assert.deepEqual(ack.at(-1).result, { taskId });
+	assert.deepEqual(await frames(cancel), ack);
+	assert.equal((await api('/runs/' + taskId)).status, 'CANCELLED');
 	console.log(
 		'PASS AG-UI real HttpAgent turns, idempotent streams, normalized input, approval, rejection, cancellation, external decisions and replay',
 	);

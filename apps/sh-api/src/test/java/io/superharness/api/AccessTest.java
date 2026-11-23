@@ -93,7 +93,7 @@ class AccessTest {
     @Autowired io.superharness.runengine.RunLifecycle lifecycle;
 
     @Test
-    void staleAttemptCannotPublishAndGateSurvivesRecovery() {
+    void staleAttemptCannotPublishAndGateSurvivesRecovery() throws Exception {
         var p = new io.superharness.domain.Principal("local", "developer");
         var agent = catalog.createAgent(p, "recovery");
         var revision =
@@ -114,21 +114,19 @@ class AccessTest {
         org.junit.jupiter.api.Assertions.assertTrue(lifecycle.reapOne());
         org.junit.jupiter.api.Assertions.assertEquals(
                 "RECOVERY_REQUIRED", runs.status(p, first.run()).get("status"));
-        lifecycle.resume(p, first.run());
+        lifecycle.resume(p, first.run(), 1);
         var next = scheduler.claim("B", "test-recovery", 1).orElseThrow();
         lifecycle.start(next);
         org.junit.jupiter.api.Assertions.assertThrows(
                 io.superharness.domain.Problem.class, () -> lifecycle.finish(first, "stale", null));
         lifecycle.delta(next, "working");
-        var old = java.util.Map.of("attempt", 1, "text", "原始草稿");
         assertEquals(
-                java.util.List.of(old, java.util.Map.of("attempt", 2, "text", "working")),
-                runs.messages(p, conv).getFirst().get("drafts"));
+                java.util.List.of("原始草稿", "working"),
+                assistantText(threads.snapshot(p, conv, null).orElseThrow()));
         lifecycle.finish(next, "fresh", null);
-        var finalMessage = runs.messages(p, conv).getFirst();
-        assertEquals(java.util.List.of(old), finalMessage.get("drafts"));
-        assertEquals("fresh", finalMessage.get("response"));
-        assertEquals(runs.status(p, next.run()).get("lastSeq"), finalMessage.get("lastSeq"));
+        assertEquals(
+                java.util.List.of("原始草稿", "fresh"),
+                assistantText(threads.snapshot(p, conv, null).orElseThrow()));
         org.junit.jupiter.api.Assertions.assertEquals(
                 next.turn().slot(),
                 io.superharness.persistence.Sql.uuid(
@@ -141,7 +139,7 @@ class AccessTest {
     }
 
     @Test
-    void historyRetainsCommittedOutputAfterFailureAndCancellation() {
+    void historyRetainsCommittedOutputAfterFailureAndCancellation() throws Exception {
         var p = new io.superharness.domain.Principal("local", "developer");
         var agent = catalog.createAgent(p, "partials");
         var revision =
@@ -155,20 +153,26 @@ class AccessTest {
             lifecycle.delta(task, "partial " + status);
             if (status.equals("CANCELLED")) lifecycle.cancel(p, task.run());
             lifecycle.finish(task, null, "MODEL_ERROR");
-            var last = runs.messages(p, conv).getLast();
-            assertEquals(status, last.get("status"));
-            assertEquals(null, last.get("response"));
-            assertEquals(
-                    java.util.List.of(java.util.Map.of("attempt", 1, "text", "partial " + status)),
-                    last.get("drafts"));
+            var view = threads.snapshot(p, conv, null).orElseThrow();
+            assertEquals(status, view.turns().getLast().get("status"));
+            assertEquals("partial " + status, assistantText(view).getLast());
         }
+    }
+
+    @Autowired AguiThreads threads;
+
+    private java.util.List<String> assistantText(AguiThreads.ThreadView view) {
+        return view.messages().stream()
+                .filter(m -> "assistant".equals(m.get("role")))
+                .map(m -> m.get("content").toString())
+                .toList();
     }
 
     @Autowired io.superharness.runengine.Approvals approvals;
     @Autowired io.superharness.runengine.Artifacts artifacts;
 
     @Test
-    void approvedPublicationHasOneReceiptAcrossRepeatedDecision() {
+    void approvedPublicationHasOneReceiptAcrossRepeatedDecision() throws Exception {
         var p = new io.superharness.domain.Principal("local", "developer");
         var agent = catalog.createAgent(p, "export");
         var revision =
@@ -187,7 +191,7 @@ class AccessTest {
                 requester.user());
         var conv = catalog.conversation(requester, agent, revision);
         org.junit.jupiter.api.Assertions.assertThrows(
-                io.superharness.domain.Problem.class, () -> runs.messages(p, conv));
+                io.superharness.domain.Problem.class, () -> threads.snapshot(p, conv, null));
         runs.submit(requester, conv, agent, revision, "data", "export", 120);
         var task = scheduler.claim("A", "test-export", 1).orElseThrow();
         lifecycle.start(task);
@@ -261,7 +265,7 @@ class AccessTest {
                 io.superharness.domain.Problem.class,
                 () -> tenants.member(owner, "lead", "MEMBER", true));
         tenants.limits(owner, 4, 10000, 1000, 1);
-        var skill = knowledge.publish(owner, "format", "1", "return text");
+        var skill = knowledge.publish(owner, "format", "1", "return text", "Format text", java.util.Map.of());
         var agent = catalog.createAgent(owner, "budget test");
         var revision =
                 catalog.publish(
@@ -275,7 +279,10 @@ class AccessTest {
                                 "skills", knowledge.pin(owner.tenant(), java.util.List.of(skill))));
         var conversation = catalog.conversation(member, agent, revision);
         runs.submit(member, conversation, agent, revision, "first", "TEST", 120);
+        knowledge.revoke(owner, skill);
         var e = scheduler.claim("test", "budget-test", 1).orElseThrow();
+        assertEquals("return text", e.turn().skills().getFirst().content());
+        assertEquals("test", e.turn().prompt());
         lifecycle.start(e);
         lifecycle.reserve(e, 100, 100);
         org.junit.jupiter.api.Assertions.assertThrows(
@@ -284,7 +291,6 @@ class AccessTest {
         org.junit.jupiter.api.Assertions.assertThrows(
                 io.superharness.domain.Problem.class, () -> lifecycle.readTool(e, "lookup"));
         lifecycle.finish(e, "done", null);
-        knowledge.revoke(owner, skill);
         // Identical request can still retrieve the accepted receipt after policy changed.
         runs.submit(member, conversation, agent, revision, "first", "TEST", 120);
         org.junit.jupiter.api.Assertions.assertThrows(

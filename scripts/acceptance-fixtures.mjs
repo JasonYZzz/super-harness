@@ -96,7 +96,9 @@ export async function fixtures(env, tls, cleanup) {
             .find((n) => n === "lookup" || n.endsWith("_lookup"));
         const lastMessage = request.messages.at(-1);
         const current = lastMessage.role === "user" ? JSON.stringify(lastMessage.content) : "";
-        const skillId = JSON.stringify(request.messages).match(/<skill-id>(skill-[^<]+)<\/skill-id>/)?.[1];
+        const catalog = request.messages.filter(m => m.role === "system").map(m => m.content).join("\n");
+        const entry = catalog.match(/<skill>[^]*?<\/skill>/g)?.find(s => s.includes("Fixture reference lookup"));
+        const skillId = entry?.match(/<skill-id>([^<]+)<\/skill-id>/)?.[1];
         const requests = [
           ["delegate-fixture", "delegate_analysis", {task:"Analyze the supplied example."}],
           ["read-draft-fixture", "read_plan", {}],
@@ -104,6 +106,7 @@ export async function fixtures(env, tls, cleanup) {
           ["plan-file-fixture", "plan_write", {content:"Approved sample steps"}],
           ["memory-save-fixture", "memory_save", {content:"- remember-fixture-value"}],
           ["memory-read-fixture", "memory_get", {path:"MEMORY.md", startLine:1, endLine:10}],
+          ["skill-reference-fixture", "load_skill_through_path", {skillId, path:"references/guide.md"}],
           ["skill-load-fixture", "load_skill_through_path", {skillId, path:"SKILL.md"}],
         ];
         const requested = requests.find(([marker]) => current.includes(marker));
@@ -225,7 +228,7 @@ export async function fixtures(env, tls, cleanup) {
     ]),
     SH_MCP_SECRET_LOOKUP: "fixture-mcp",
   });
-  function signed(aud, tenant) {
+  function signed(aud, tenant, subject = "developer", scope = "") {
     const now = Math.floor(Date.now() / 1000);
     const encode = (data) =>
       Buffer.from(JSON.stringify(data)).toString("base64url");
@@ -234,8 +237,9 @@ export async function fixtures(env, tls, cleanup) {
       "." +
       encode({
         iss: issuer,
-        sub: "developer",
+        sub: subject,
         tenant_id: tenant,
+        scope,
         aud: [aud],
         iat: now,
         exp: now + 120,

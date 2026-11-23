@@ -33,7 +33,7 @@ public class RunLifecycle {
         var row = lock(e.tenant(), e.run());
         // Evaluate the clock after acquisition, even when the lock was contended.
         if (sql.count(
-                        """
+"""
 SELECT COUNT(*) FROM agent_runs WHERE tenant_id=? AND id=? AND lease_owner=? AND fence=?
   AND status IN ('CLAIMED','RUNNING') AND lease_deadline>UTC_TIMESTAMP(6)
 """,
@@ -116,7 +116,7 @@ SELECT COUNT(*) FROM agent_runs WHERE tenant_id=? AND id=? AND lease_owner=? AND
             throw new Problem(429, "MODEL_BUDGET_EXCEEDED");
         var call = UUID.randomUUID();
         sql.update(
-                """
+"""
 INSERT INTO model_usage(id,tenant_id,run_id,attempt,model,reserved,currency,input_per_million,output_per_million)
 SELECT ?,?,?,?, ?,?,JSON_UNQUOTE(JSON_EXTRACT(cfg,'$.pricing.currency')),
   JSON_UNQUOTE(JSON_EXTRACT(cfg,'$.pricing.inputPerMillion')), JSON_UNQUOTE(JSON_EXTRACT(cfg,'$.pricing.outputPerMillion'))
@@ -222,7 +222,7 @@ FROM (SELECT COALESCE(r.input_json->'$.modelOverride',a.config) AS cfg
                 e.tenant(),
                 e.turn().conversation());
         sql.update(
-                """
+"""
 INSERT INTO run_checkpoints(id,tenant_id,run_id,attempt,boundary,state_ref,safe_to_replay)
 VALUES(?,?,?,?,'TURN_COMPLETED',?,TRUE)
 """,
@@ -259,7 +259,7 @@ VALUES(?,?,?,?,'TURN_COMPLETED',?,TRUE)
                                 "text",
                                 result));
         sql.update(
-                """
+"""
 INSERT INTO tool_executions(id,tenant_id,run_id,logical_step_id,tool_name,tool_version,args_sha256,
   idempotency_key,status,result_ref) VALUES(?,?,?,'final-export','publish_text','1',?,?,'PENDING',?)
 """,
@@ -270,7 +270,7 @@ INSERT INTO tool_executions(id,tenant_id,run_id,logical_step_id,tool_name,tool_v
                 e.run() + "/final-export/1",
                 args);
         sql.update(
-                """
+"""
 INSERT INTO approvals(id,tenant_id,run_id,tool_execution_id,requested_args_sha256,status,requested_by,expires_at)
 SELECT ?,tenant_id,id,?,?,'PENDING',requested_by,deadline_at FROM agent_runs WHERE tenant_id=? AND id=?
 """,
@@ -280,7 +280,7 @@ SELECT ?,tenant_id,id,?,?,'PENDING',requested_by,deadline_at FROM agent_runs WHE
                 e.tenant(),
                 e.run());
         sql.update(
-                """
+"""
 INSERT INTO run_checkpoints(id,tenant_id,run_id,attempt,boundary,state_ref,safe_to_replay)
 VALUES(?,?,?,?,'WAITING_APPROVAL',?,TRUE)
 """,
@@ -290,7 +290,7 @@ VALUES(?,?,?,?,'WAITING_APPROVAL',?,TRUE)
                 e.attempt(),
                 e.turn().slot().toString());
         sql.update(
-                """
+"""
 UPDATE agent_runs SET status='WAITING_APPROVAL',fence=fence+1,lease_owner=NULL,lease_deadline=NULL
 WHERE tenant_id=? AND id=?
 """,
@@ -390,10 +390,20 @@ WHERE tenant_id=? AND id=?
     }
 
     @Transactional
-    public void resume(Principal p, UUID run) {
+    public void resume(Principal p, UUID run, int attempt) {
         catalog.role(p);
         var r = lock(p.tenant(), run);
         if (!p.user().equals(r.get("requested_by"))) throw Problem.missing();
+        // The recovery acknowledgement belongs to the failed attempt, even after it is retried.
+        if (sql.count(
+                        "SELECT COUNT(*) FROM run_events WHERE tenant_id=? AND run_id=? AND"
+                            + " attempt=? AND event_type='run.recovering'",
+                        p.tenant(),
+                        run,
+                        attempt)
+                > 0) return;
+        if (((Number) r.get("attempt")).intValue() != attempt)
+            throw new Problem(409, "STALE_RECOVERY_ATTEMPT");
         if (!"RECOVERY_REQUIRED".equals(r.get("status")) || hasUnknownTool(p.tenant(), run))
             throw new Problem(409, "NO_SAFE_RETRY");
         if (overdue(p.tenant(), run)) throw new Problem(409, "DEADLINE_EXCEEDED");

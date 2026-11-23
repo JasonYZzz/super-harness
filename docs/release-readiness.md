@@ -1,6 +1,29 @@
 # 研发验收记录
 
+## 单一 AG-UI 入口（2026-11-23）
+
+部署的 OpenAPI 仅注册 `POST /api/v1/ag-ui/runs` 一个 AG-UI 操作。文本、同键重放、审批、快照、只读观察、取消与故障恢复均使用同一地址；原来的运行提交、消息历史、审批决定和 AG-UI 快照及连接路径均已移除。[当前契约与迁移表](ag-ui.md) · [OpenAPI](api/openapi.json)
+
+| 验证 | 覆盖范围 |
+|---|---|
+| 构建与 Java | 打包 API、Worker、Reconciler；3 个事件投影测试、2 个模块边界测试通过。另在隔离 MySQL 上运行 8 个 AccessTest，覆盖租户隔离、恢复、历史、审批及过期。 |
+| 客户端 | 真实官方 HttpAgent 验证正常请求、断线重放、快照游标、观察任务、拒绝混合读写、回执及审批幂等。 Chromium 覆盖同一聊天地址跨标签页审批、提交冲突、计划恢复、导航和产物下载。 |
+| 独立审批人 | 使用 OIDC 中不同的会话所有者与 APPROVER。审批人可重放自己的决定，收到开始、工具回执和终态三个事件；请求他人会话快照返回 404。 |
+| 部署演练 | 强制替换 API 和 Worker 后，任务在 61.195 秒进入可恢复状态，重发同一尝试的恢复命令后只有一个完成事件。100 个会话的 500 条原生账本订阅全部完成，接单 p95 为 947 ms。双库还原后校验产物内容并继续对话。 |
+
+前端生产构建及 TypeScript 检查通过，ESLint 为 0 个错误、12 个既有警告。本轮使用独立端口和一次性本机 MySQL 26.7，Docker MySQL 8.4 的运行记录见下方历史批次。[端到端验收](../scripts/acceptance.mjs) · [协议回归](../web/test/agui-acceptance.mjs) · [聊天页面回归](../web/test/official-chat.spec.ts)
+
+## 双页面过渡阶段验收（历史记录，2026-11-23）
+
+从两个页面路由追踪到同一处 `HttpAgent.runAgent` 调用。发送和只读连接共用 Java 事件投影，历史快照共用账本读取逻辑。已对照 OpenAPI 检查三个 HTTP 入口、两条 SSE 响应及快照的 204 响应。[当前接入协议](ag-ui.md)
+
+复核时复现了一个状态差异：审批中断时客户端已显示本轮计划，拒绝或放弃审批的续接流可能只报告失败，刷新后计划才回滚。修复后，续接流在终止前发送与服务端快照一致的 `state.tasks`。3 个 Java 投影单测通过，新增用例分别覆盖拒绝和放弃。[回归用例](../apps/sh-api/src/test/java/io/superharness/api/AguiProjectionTest.java)
+
+使用隔离的本机 MySQL、打包的 API、Worker 和 Reconciler 运行真实 `HttpAgent` 验收及 5 个 Chromium 用例，全部通过。覆盖跨页审批和回执、断线重放、提交冲突后的输入框恢复，以及多轮计划刷新。前端 TypeScript 检查通过。此次验证未重跑 Docker MySQL 8.4、负载和备份还原。[协议验收](../web/test/agui-acceptance.mjs) · [跨页审批](../web/test/agui.spec.ts) · [主聊天](../web/test/official-chat.spec.ts)
+
 ## AG-UI 开发交付
+
+以下为首版独立客户端的验收记录。当前单一聊天入口的 HTTP 契约、恢复规则和维护入口见[当前接入协议](ag-ui.md)。
 
 会话页面通过官方 `@ag-ui/client@1.0.5` 连接 `POST /api/v1/ag-ui/runs`。开发验收从打包后的 API、Worker、Reconciler 启动，用临时 MySQL 双库、确定性模型与本地 OpenAI 兼容夹具完成。项目沿用既有任务、审批与账本，本次数据库迁移数为零。[实施计划](ag-ui-implementation-plan.md) · [接口样例](api/openapi.json)
 

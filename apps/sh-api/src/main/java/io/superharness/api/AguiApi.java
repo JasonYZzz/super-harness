@@ -2,6 +2,7 @@ package io.superharness.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.superharness.contract.AguiInput;
 import io.superharness.domain.*;
 import io.superharness.runengine.*;
 import io.swagger.v3.oas.annotations.media.*;
@@ -22,7 +23,15 @@ class AguiApi {
     private final RunLifecycle lifecycle;
     private final ObjectMapper mapper;
 
-    AguiApi(Runs runs, Approvals approvals, RunLifecycle lifecycle, ObjectMapper mapper) {
+    private final AguiThreads threads;
+
+    AguiApi(
+            Runs runs,
+            Approvals approvals,
+            RunLifecycle lifecycle,
+            ObjectMapper mapper,
+            AguiThreads threads) {
+        this.threads = threads;
         this.runs = runs;
         this.approvals = approvals;
         this.lifecycle = lifecycle;
@@ -32,8 +41,9 @@ class AguiApi {
     @io.swagger.v3.oas.annotations.Operation(
             summary = "Execute or replay a durable AG-UI interaction",
             description =
-                    "Submit one user text message or resume a publish_text interrupt. Repeating the"
-                            + " original input replays the complete interaction.")
+                    "Submit text, resume an interrupt, or use a Harness extension (harness.snapshot,"
+                        + " harness.observe, harness.cancel, harness.recover). Repeating the"
+                        + " original input replays the complete interaction.")
     @io.swagger.v3.oas.annotations.parameters.RequestBody(
             required = true,
             content =
@@ -41,6 +51,20 @@ class AguiApi {
                             mediaType = "application/json",
                             schema = @Schema(implementation = AguiInput.class),
                             examples = {
+                                @ExampleObject(
+                                        name = "Read thread",
+                                        value =
+                                                """
+                                                {"threadId":"11111111-1111-4111-8111-111111111111","runId":"read-1",
+                                                 "messages":[],"forwardedProps":{"harness.snapshot":{}}}
+                                                """),
+                                @ExampleObject(
+                                        name = "Observe task",
+                                        value =
+                                                """
+                                                {"threadId":"11111111-1111-4111-8111-111111111111","runId":"observe-1",
+                                                 "messages":[],"forwardedProps":{"harness.observe":"33333333-3333-4333-8333-333333333333"}}
+                                                """),
                                 @ExampleObject(
                                         name = "Text turn",
                                         value =
@@ -121,61 +145,119 @@ class AguiApi {
             @AuthenticationPrincipal Jwt jwt,
             @RequestBody AguiInput input,
             jakarta.servlet.http.HttpServletRequest request,
-            jakarta.servlet.http.HttpServletResponse response) {
-        input.validate();
+            jakarta.servlet.http.HttpServletResponse response)
+            throws java.io.IOException {
+        var extension = input.validate();
         var p = Identity.principal(jwt);
-        UUID run;
-        Map<String, Object> proposal = null;
-        long cursor = 0;
-        String failure = null;
-        try {
-            if (input.resume() != null && !input.resume().isEmpty()) {
-                var decision = input.decision();
-                proposal = approvals.proposal(p, input.threadId(), decision.approval());
-                run = UUID.fromString(proposal.get("runId").toString());
-                if (runs.interactionKey(input.threadId(), input.runId())
-                        .equals(proposal.get("requestKey")))
-                    throw new Problem(400, "RESUME_REQUIRES_NEW_RUN");
-                if (decision.cancelled()) lifecycle.cancelApproval(p, run, decision.approval());
-                else approvals.decide(p, decision.approval(), decision.hash(), decision.approved());
-                cursor = ((Number) proposal.get("interruptSeq")).longValue();
-            } else {
-                var message = input.userMessage();
-                var status =
-                        runs.submitInteraction(
-                                p, input.threadId(), input.runId(), message.id(), message.text());
-                run = UUID.fromString(status.get("runId").toString());
-            }
-        } catch (Problem ex) {
-            boolean resume = input.resume() != null && !input.resume().isEmpty();
-            if (ex.status == 403 || (!resume && !ex.getMessage().equals("INTERRUPT_PENDING")))
-                throw ex;
-            failure = ex.status == 404 ? "INVALID_INTERRUPT" : ex.getMessage();
-            run = null;
+        if (extension instanceof AguiInput.Snapshot snapshot) {
+            var view = threads.snapshot(p, input.threadId(), snapshot.since());
+            return RunStream.response(
+                    request, out -> projection(input, p, null, null, out).threadSnapshot(view));
         }
-        final var id = run;
-        final var previous = proposal;
-        final long start = cursor;
-        final var error = failure;
-        StreamingResponseBody body =
-                out -> {
-                    var writer =
-                            new AguiProjection(
-                                    input,
+        if (extension instanceof AguiInput.TaskOperation operation) {
+            var task = operation.task();
+            if (!input.threadId().toString().equals(runs.status(p, task).get("conversationId")))
+                throw Problem.missing();
+            if (operation instanceof AguiInput.Cancel cancel) {
+                lifecycle.cancel(p, cancel.task());
+            } else if (operation instanceof AguiInput.Recover recover) {
+                lifecycle.resume(p, recover.task(), recover.attempt());
+            } else {
+                return RunStream.response(
+                        request,
+                        out ->
+                                RunStream.tail(
+                                        runs,
+                                        p,
+                                        task,
+                                        0,
+                                        jwt,
+                                        out,
+                                        response,
+                                        projection(input, p, task, null, out)::acceptForReader));
+            }
+            return RunStream.response(
+                    request, out -> projection(input, p, task, null, out).acknowledge(task));
+        }
+        boolean continuing = input.resume() != null && !input.resume().isEmpty();
+        try {
+            if (continuing) return RunStream.response(request, resume(input, p, jwt, response));
+            var message = input.userMessage();
+            var task =
+                    runs.submitInteraction(
+                            p, input.threadId(), input.runId(), message.id(), message.text());
+            var id = UUID.fromString(task.get("runId").toString());
+            return RunStream.response(
+                    request,
+                    out ->
+                            RunStream.tail(
+                                    runs,
+                                    p,
                                     id,
-                                    previous,
-                                    mapper,
+                                    0,
+                                    jwt,
                                     out,
-                                    seq -> runs.historyThrough(p, id, seq),
-                                    approval -> approvals.proposal(p, input.threadId(), approval));
-                    if (error != null) {
+                                    response,
+                                    projection(input, p, id, null, out)::accept));
+        } catch (Problem ex) {
+            if (ex.status == 403 || (!continuing && !"INTERRUPT_PENDING".equals(ex.getMessage())))
+                throw ex;
+            String code = ex.status == 404 ? "INVALID_INTERRUPT" : ex.getMessage();
+            return RunStream.response(
+                    request,
+                    out -> {
+                        var writer = projection(input, p, null, null, out);
                         writer.start();
-                        writer.error(error);
-                        return;
-                    }
-                    if (previous != null) writer.start();
-                    RunStream.tail(runs, p, id, start, jwt, out, response, writer::accept);
-                };
-        return RunStream.response(request, body);
+                        writer.error(code);
+                    });
+        }
+    }
+
+    private StreamingResponseBody resume(
+            AguiInput input,
+            Principal p,
+            Jwt jwt,
+            jakarta.servlet.http.HttpServletResponse response) {
+        var decision = input.decision();
+        var proposal = approvals.proposalForDecision(p, input.threadId(), decision.approval());
+        var task = UUID.fromString(proposal.get("runId").toString());
+        if (runs.interactionKey(input.threadId(), input.runId()).equals(proposal.get("requestKey")))
+            throw new Problem(400, "RESUME_REQUIRES_NEW_RUN");
+        boolean own = p.user().equals(proposal.get("requester"));
+        if (decision.cancelled()) {
+            if (!own) throw Problem.denied();
+            lifecycle.cancelApproval(p, task, decision.approval());
+        } else {
+            var receipt =
+                    approvals.decide(p, decision.approval(), decision.hash(), decision.approved());
+            if (!own) {
+                // The reviewer's grant covers the decision and its receipt only.
+                return out ->
+                        projection(input, p, null, null, out)
+                                .reviewReceipt(receipt, decision.approved());
+            }
+        }
+        long cursor = ((Number) proposal.get("interruptSeq")).longValue();
+        return out -> {
+            var writer = projection(input, p, task, proposal, out);
+            writer.start();
+            RunStream.tail(runs, p, task, cursor, jwt, out, response, writer::accept);
+        };
+    }
+
+    private AguiProjection projection(
+            AguiInput input,
+            Principal p,
+            UUID task,
+            Map<String, Object> previous,
+            java.io.OutputStream out) {
+        return new AguiProjection(
+                input,
+                task,
+                previous,
+                mapper,
+                out,
+                seq -> runs.historyThrough(p, task, seq),
+                approval -> approvals.proposal(p, input.threadId(), approval));
     }
 }

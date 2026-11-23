@@ -42,12 +42,12 @@ Chart 默认暴露一个集群内 API Service，Worker、Reconciler 各自部署
 
 ## 告警和调查
 
-Prometheus 从 API 的 `/actuator/prometheus` 抓取指标，令牌须带 `metrics.read` scope。部署目录包含 Grafana dashboard 和告警规则。多个 API 副本都从同一主库读取状态，跨副本用 `max` 聚合。`SH_TRACING_ENABLED=true` 开启 OpenTelemetry，`SH_OTLP_TRACES_ENDPOINT` 指向接收 OTLP/HTTP 的 traces 端点。可从 `GET /api/v1/runs/{id}/trace` 查看队列等待、执行时间、尝试边界和供应商 Token；已采样的 HTTP 链路有 trace ID。采集和日志中避免存储提示词、令牌与产物正文。
+Prometheus 从 API 的 `/actuator/prometheus` 抓取指标，使用独立采集身份签发的令牌，scope 为 `metrics.read`。API 将携带此 scope 的令牌限定于指标采集，业务接口和 OpenAPI 对其返回 403。生产 OIDC 应将此 scope 仅分配给采集客户端。本地使用 `./scripts/dev-token.sh --metrics` 签发一小时有效的 `prometheus` 令牌，普通登录令牌用于业务访问。部署目录包含 Grafana dashboard 和告警规则。多个 API 副本都从同一主库读取状态，跨副本用 `max` 聚合。`SH_TRACING_ENABLED=true` 开启 OpenTelemetry，`SH_OTLP_TRACES_ENDPOINT` 指向接收 OTLP/HTTP 的 traces 端点。可从 `GET /api/v1/runs/{id}/trace` 查看队列等待、执行时间、尝试边界和供应商 Token；已采样的 HTTP 链路有 trace ID。采集和日志中避免存储提示词、令牌与产物正文。
 
 - **队列堆积**。检查 Worker 的 profile、版本、可用容量和数据库连接。处于审批或恢复中的同一会话会继续持有会话门闩，处理首个阻塞任务后再观察队列。
 - **Worker 丢失**。租约 60 秒，默认心跳及巡检间隔均为 5 秒。到期后 Reconciler 记录恢复事件并废弃旧 fence。检查事件和工具回执，通过任务详情恢复，无效旧 Worker 无法发布其状态槽。
 - **待审批发文**。核对工具、参数摘要和内容。重复提交同一决定只产生一个回执。对状态未知的外部动作，先向原服务核对权威回执，保留证据，再决定人工处置。
-- **API 切换**。让客户端携带最后确认的事件 ID 访问任一 API 副本。数据库轮询支持丢失通知后的追赶。中断浏览器请求不取消任务。
+- **API 切换**。聊天客户端向同一 AG-UI 地址重发未确认命令，或读取会话快照并观察活动任务。运维订阅者可携带最后确认的账本事件 ID 访问任一 API 副本。数据库轮询支持丢失通知后的追赶。中断浏览器请求不取消任务。
 - **模型或 MCP 异常**。先核对模型白名单、密钥绑定、TLS、请求限额，再检查任务的尝试与审计记录。未知用量先计入预留。用户删除记忆后，新执行读取最新可见记录，已提交的事件和审计仍按保留策略处理。
 
 ## 备份、迁移、回滚

@@ -3,6 +3,11 @@
   <parent><groupId>io.superharness</groupId><artifactId>super-harness</artifactId><version>0.1.0-SNAPSHOT</version><relativePath>../../pom.xml</relativePath></parent>
   <artifactId>sh-api</artifactId>
   <dependencies>
+    <dependency><groupId>io.agentscope</groupId><artifactId>agentscope-core</artifactId><version>${agentscope.version}</version>
+      <!-- The API uses only the SDK Markdown parser. Model, storage and tool dependencies belong to the worker. -->
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency><groupId>org.yaml</groupId><artifactId>snakeyaml</artifactId></dependency>
     <dependency><groupId>org.springdoc</groupId><artifactId>springdoc-openapi-starter-webmvc-api</artifactId><version>3.0.3</version></dependency>
     <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-opentelemetry</artifactId></dependency>

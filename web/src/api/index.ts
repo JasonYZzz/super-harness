@@ -1,8 +1,7 @@
 export * from './types';
 export { agentApi } from './agent';
-export { sessionApi, takeFreshlyCreated } from './session';
+export { sessionApi } from './session';
 export { credentialApi } from './credential';
-export { chatApi } from './chat';
 export { workspaceApi } from './workspace';
 export { hubApi } from './hub';
 export { mcpApi } from './mcp';

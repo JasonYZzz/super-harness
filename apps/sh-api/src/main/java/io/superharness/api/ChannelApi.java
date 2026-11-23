@@ -99,8 +99,7 @@ class ChannelApi {
                                 });
         String key = "channel-" + sql.digest(List.of(conversation, message.messageId()));
         var status =
-                runs.submit(
-                        p, conversation, message.agentId(), null, message.text(), key, 1200, true);
+                runs.submit(p, conversation, message.agentId(), null, message.text(), key, 1200);
         return ResponseEntity.accepted()
                 .body(
                         Map.of(

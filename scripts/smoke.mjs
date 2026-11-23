@@ -9,7 +9,7 @@ const token = execFileSync(
   fileURLToPath(new URL("./dev-token.sh", import.meta.url)),
   { encoding: "utf8" },
 ).trim();
-const { api, conversation, submit, waitStatus, events } = client(
+const { api, conversation, submit, snapshot, waitStatus, events } = client(
   process.env.SH_API_URL || "http://127.0.0.1:8080",
   token,
 );
@@ -32,9 +32,9 @@ for (const text of ["第一轮", "第二轮"]) {
   assert.equal(records.at(-1).payload.text, "收到：" + text);
   assert.deepEqual(await events(run, 1), records.slice(1));
 }
-const messages = await api("/conversations/" + id + "/messages");
-assert.equal(messages.length, 2);
-assert.equal(messages.at(-1).response, "收到：第二轮");
+const view = await snapshot(id);
+assert.equal(view.turns.length, 2);
+assert.equal(view.messages.at(-1).content, "收到：第二轮");
 console.log(
   "PASS two completed turns, idempotency, conversation history and SSE replay",
 );

@@ -43,6 +43,7 @@ import { Spinner } from '@/components/ui/spinner.tsx';
 import { useResourceDrawer } from '@/hooks/useResourceDrawer.ts';
 import { useSkillHubCards } from '@/hooks/useSkillHubCards.ts';
 import { useSkillHubs } from '@/hooks/useSkillHubs.ts';
+import { useSkillManagement } from '@/hooks/useSkillManagement';
 import { useSkills } from '@/hooks/useSkills.ts';
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
@@ -309,7 +310,7 @@ function HubPanel({ hubId, hub, installedNames, onInstalled }: HubPanelProps) {
 interface MinePanelProps {
 	skills: SkillView[];
 	loading: boolean;
-	onRemove: (skillId: string) => void;
+	onRemove?: (skillId: string) => Promise<boolean>;
 }
 
 function MinePanel({ skills, loading, onRemove }: MinePanelProps) {
@@ -320,8 +321,6 @@ function MinePanel({ skills, loading, onRemove }: MinePanelProps) {
 		useCallback((skill) => skillApi.get((skill as SkillView).id), []),
 	);
 
-	// Filtered client-side: the library is the user's own and small, so a
-	// round trip per keystroke would buy nothing.
 	const needle = query.trim().toLowerCase();
 	const shown = needle
 		? skills.filter((skill) =>
@@ -428,19 +427,21 @@ function MinePanel({ skills, loading, onRemove }: MinePanelProps) {
 										{skill.version}
 									</span>
 								)}
-								<Button
-									size="icon-sm"
-									variant="ghost"
-									// Deleting from the row must not also
-									// open the drawer behind it.
-									onClick={(e) => {
-										e.stopPropagation();
-										onRemove(skill.id);
-									}}
-									title={t('common.delete')}
-								>
-									<Trash2 />
-								</Button>
+								{onRemove && (
+									<Button
+										size="icon-sm"
+										variant="ghost"
+										// Deleting from the row must not also
+										// open the drawer behind it.
+										onClick={(e) => {
+											e.stopPropagation();
+											void onRemove(skill.id);
+										}}
+										title={t('skill.revoke')}
+									>
+										<Trash2 />
+									</Button>
+								)}
 							</ItemActions>
 						</Item>
 					))}
@@ -454,16 +455,18 @@ function MinePanel({ skills, loading, onRemove }: MinePanelProps) {
 					if (!open) drawer.close();
 				}}
 				action={
-					<Button
-						variant="destructive"
-						onClick={() => {
-							if (drawer.opened) onRemove((drawer.opened as SkillView).id);
-							drawer.close();
-						}}
-					>
-						<Trash2 />
-						{t('common.delete')}
-					</Button>
+					onRemove && (
+						<Button
+							variant="destructive"
+							onClick={async () => {
+								if (drawer.opened && (await onRemove((drawer.opened as SkillView).id)))
+									drawer.close();
+							}}
+						>
+							<Trash2 />
+							{t('skill.revoke')}
+						</Button>
+					)
 				}
 			/>
 		</ResourcePanel>
@@ -478,7 +481,13 @@ export function SkillHubPage() {
 	const { hubs, loading: hubsLoading, error: hubsError, refetch } = useSkillHubs();
 	// Loaded page-wide, not per panel: the hub view needs it to mark cards
 	// as already installed, and the "mine" view to list them.
-	const { skills, loading: skillsLoading, refetch: refetchSkills, remove } = useSkills();
+	const {
+		skills,
+		loading: skillsLoading,
+		refetch: refetchSkills,
+		error: skillsError,
+	} = useSkills();
+	const { canEdit, revoke } = useSkillManagement();
 	const installedNames = new Set(skills.map((skill) => skill.name));
 
 	return (
@@ -492,7 +501,6 @@ export function SkillHubPage() {
 				</SidebarHeader>
 				<SidebarContent>
 					<SidebarGroup className="mt-6 px-2 py-0">
-						<SidebarGroupLabel>{t('common.mine')}</SidebarGroupLabel>
 						<SidebarGroupContent>
 							<SidebarMenu>
 								<SidebarMenuItem>
@@ -513,7 +521,7 @@ export function SkillHubPage() {
 						</SidebarGroupContent>
 					</SidebarGroup>
 
-					<SidebarGroup className="mt-5 px-2 py-0">
+					<SidebarGroup className={hubsLoading || hubsError || hubs.length ? "mt-5 px-2 py-0" : "hidden"}>
 						<SidebarGroupLabel className="justify-between">
 							{t('skill.hubsLabel')}
 							{hubs.length > 0 && (
@@ -594,7 +602,7 @@ export function SkillHubPage() {
 			</Sidebar>
 
 			<main className="flex-1 min-w-0 min-h-0 overflow-hidden rounded-[22px] bg-card shadow-panel">
-				{hubId ? (
+				{hubId && hubs.some((hub) => hub.hub_id === hubId) ? (
 					// Remount on hub change so the panel's query box resets.
 					<HubPanel
 						key={hubId}
@@ -603,8 +611,17 @@ export function SkillHubPage() {
 						installedNames={installedNames}
 						onInstalled={refetchSkills}
 					/>
+				) : skillsError ? (
+					<div role="alert" className="p-4">
+						{skillsError.message}
+						<Button onClick={() => void refetchSkills()}>{t('skill.retry')}</Button>
+					</div>
 				) : (
-					<MinePanel skills={skills} loading={skillsLoading} onRemove={remove} />
+					<MinePanel
+						skills={skills}
+						loading={skillsLoading}
+						onRemove={canEdit ? revoke : undefined}
+					/>
 				)}
 			</main>
 		</div>

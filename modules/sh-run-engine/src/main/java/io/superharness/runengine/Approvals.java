@@ -31,7 +31,7 @@ public class Approvals {
                 sql.rows(
                         """
                         SELECT BIN_TO_UUID(a.id) AS id,BIN_TO_UUID(a.run_id) AS runId,a.requested_args_sha256 AS argsHash,
-                          a.status,a.expires_at AS expiresAt,t.tool_name AS tool,t.tool_version AS version,
+                          BIN_TO_UUID(r.conversation_id) AS threadId,a.status,a.expires_at AS expiresAt,t.tool_name AS tool,t.tool_version AS version,
                           LEFT(t.result_ref->>'$.text',1000) AS preview,t.result_ref->>'$.size' AS bytes
                         FROM approvals a JOIN tool_executions t ON t.tenant_id=a.tenant_id AND t.id=a.tool_execution_id
                         JOIN agent_runs r ON r.tenant_id=a.tenant_id AND r.id=a.run_id
@@ -47,32 +47,42 @@ public class Approvals {
 
     /** Immutable proposal data, also available after an approval closes for exact replay. */
     public Map<String, Object> proposal(Principal p, UUID thread, UUID approval) {
-        var role = catalog.role(p);
+        return proposal(p, thread, approval, false);
+    }
+
+    public Map<String, Object> proposalForDecision(Principal p, UUID thread, UUID approval) {
+        return proposal(p, thread, approval, true);
+    }
+
+    private Map<String, Object> proposal(
+            Principal p, UUID thread, UUID approval, boolean forDecision) {
+        boolean reviewer = Set.of("OWNER", "APPROVER").contains(catalog.role(p));
         var row =
                 sql.first(
                                 """
                                 SELECT BIN_TO_UUID(a.run_id) AS runId, BIN_TO_UUID(a.tool_execution_id) AS toolCallId,
                                        a.requested_args_sha256 AS argsHash, a.expires_at AS expiresAt,
                                        t.result_ref->>'$.text' AS text, t.result_ref->>'$.size' AS bytes,
-                                       r.request_key AS requestKey, e.seq AS interruptSeq
+                                       r.request_key AS requestKey, e.seq AS interruptSeq, r.requested_by AS requester
                                 FROM approvals a JOIN agent_runs r ON r.tenant_id=a.tenant_id AND r.id=a.run_id
                                 JOIN tool_executions t ON t.tenant_id=a.tenant_id AND t.id=a.tool_execution_id
                                 JOIN run_events e ON e.run_id=r.id AND e.event_type='approval.required'
                                       AND e.payload->>'$.approvalId'=BIN_TO_UUID(a.id)
-                                WHERE a.tenant_id=? AND a.id=? AND r.conversation_id=? AND r.requested_by=?
+                                WHERE a.tenant_id=? AND a.id=? AND r.conversation_id=? AND (r.requested_by=? OR ?)
                                 """,
                                 p.tenant(),
                                 approval,
                                 thread,
-                                p.user())
+                                p.user(),
+                                forDecision && reviewer)
                         .orElseThrow(Problem::missing);
         Sql.utcTimes(row, "expiresAt");
-        row.put("canDecide", Set.of("OWNER", "APPROVER").contains(role));
+        row.put("canDecide", reviewer);
         return row;
     }
 
     @Transactional
-    public void decide(Principal p, UUID id, String hash, boolean approve) {
+    public UUID decide(Principal p, UUID id, String hash, boolean approve) {
         if (!Set.of("OWNER", "APPROVER").contains(catalog.role(p))) throw Problem.denied();
         var link =
                 sql.first("SELECT run_id FROM approvals WHERE tenant_id=? AND id=?", p.tenant(), id)
@@ -96,7 +106,8 @@ public class Approvals {
         if (!hash.equals(a.get("requested_args_sha256")) || !hash.equals(a.get("args_sha256")))
             throw new Problem(409, "APPROVAL_HASH_MISMATCH");
         String decision = approve ? "APPROVED" : "REJECTED";
-        if (decision.equals(a.get("status"))) return;
+        var tool = Sql.uuid(a.get("tool_execution_id"));
+        if (decision.equals(a.get("status"))) return tool;
         if (!"WAITING_APPROVAL".equals(r.get("status"))
                 || sql.update(
                                 """
@@ -113,7 +124,6 @@ public class Approvals {
                 run,
                 "approval.decided",
                 Map.of("approvalId", id, "decision", decision, "actor", p.user()));
-        var tool = Sql.uuid(a.get("tool_execution_id"));
         var args = sql.parse(a.get("result_ref"));
         if (!hash.equals(
                 sql.digest(
@@ -179,5 +189,6 @@ public class Approvals {
                 approve
                         ? Map.of("text", args.get("text").asText())
                         : Map.of("code", "APPROVAL_REJECTED"));
+        return tool;
     }
 }

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 
 import type { AgentSchemaV2Response, JSONSchema, JSONSchemaProperty } from '@/api';
-import { api } from '@/api/harness';
+import { skillVersions } from '@/api/skill';
 import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
 import {
 	FieldDescription,
@@ -87,10 +87,7 @@ function sliceSchema(root: JSONSchema): Record<AgentSection, JSONSchema> {
 export function AgentFormFields({ schema, values, onChange }: Props) {
 	const { t } = useTranslation();
 	const sections = sliceSchema(schema.schema);
-	const skills = useQuery({
-		queryKey: ['agent-skill-versions'],
-		queryFn: () => api<{ id: string; name: string; version: string; revoked: boolean }[]>('/skills'),
-	});
+	const skills = useQuery(skillVersions);
 	const selected = String(values.identity.skill_ids ?? '').split(',').filter(Boolean);
 
 	const rows: Array<{ key: AgentSection; i18n: string; sectionSchema: JSONSchema }> = [
@@ -148,11 +145,12 @@ export function AgentFormFields({ schema, values, onChange }: Props) {
 			})}
 			{skills.isError && <p role="alert">技能版本加载失败</p>}
 			{Boolean(skills.data?.length) && <FieldSet>
-				<FieldLegend>固定技能版本（最多四个）</FieldLegend>
+				<FieldLegend>固定技能版本（最多四个，每种技能一个版本）</FieldLegend>
 				{skills.data?.filter(skill => !skill.revoked || selected.includes(skill.id)).map(skill => (
 					<label className="flex items-center gap-2 text-sm" key={skill.id}>
 						<input type="checkbox" checked={selected.includes(skill.id)}
-							disabled={!selected.includes(skill.id) && selected.length >= 4}
+							disabled={!selected.includes(skill.id) && (selected.length >= 4 ||
+                                skills.data?.some(other => other.name === skill.name && selected.includes(other.id)))}
 							onChange={e => onChange('identity', 'skill_ids', (e.target.checked
 								? [...selected, skill.id] : selected.filter(id => id !== skill.id)).join(','))} />
 						{skill.name} · {skill.version}{skill.revoked ? '（已撤销）' : ''}

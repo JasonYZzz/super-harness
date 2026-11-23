@@ -23,7 +23,7 @@ test.afterEach(async ({ request }) => {
 });
 
 test('official AgentScope chat uses authenticated Java conversations, approvals and artifacts', async ({
-	page,
+	page, context,
 }) => {
 	const errors: string[] = [];
 	const unexpectedApiRequests: string[] = [];
@@ -90,18 +90,33 @@ test('official AgentScope chat uses authenticated Java conversations, approvals 
 	const composer = page.getByPlaceholder('输入消息...');
 	let closed = false,
 		reconnected = false;
-	await page.route('**/events?afterSeq=*', async (route) => {
+	await page.route('**/api/v1/ag-ui/runs', async (route) => {
+		if (Object.keys(route.request().postDataJSON().forwardedProps ?? {}).length) return route.continue();
 		if (closed) {
 			reconnected = true;
 			return route.continue();
 		}
 		closed = true;
+		// Lose the response after the server has accepted the command.
+		await route.fetch();
 		await route.fulfill({ contentType: 'text/event-stream', body: ': disconnected\n\n' });
 	});
 	for (const text of ['第一轮 **回放**', '第二轮 **回答**']) {
 		await composer.fill(text);
 		await composer.press('Enter');
-		await page.getByRole('button', { name: /1\. 是/ }).click();
+		const approval = page.getByRole('button', { name: /1\. 是/ });
+		await expect(approval).toBeVisible();
+		if (text.startsWith('第一')) {
+			const other = await context.newPage();
+			await other.addInitScript(token => sessionStorage.setItem('harness.access', token),
+				created.request().headers().authorization.slice(7));
+			await other.goto(history);
+			await other.getByRole('button', { name: /1\. 是/ }).click();
+			await expect(other.getByPlaceholder('输入消息...')).toBeEnabled();
+			await other.close();
+		} else {
+			await approval.click();
+		}
 		await expect(page.locator('[data-role="assistant"]').last()).toContainText(
 			text.includes('第一') ? '回放' : '回答',
 		);

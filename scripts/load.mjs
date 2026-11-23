@@ -1,6 +1,6 @@
 // Run only inside acceptance.mjs's disposable database. Each stream checks its entire persisted sequence.
 import {execFileSync} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
+import {client} from './test-client.mjs';
 import assert from 'node:assert/strict';
 import {setTimeout as sleep} from 'node:timers/promises';
 if (process.env.SH_ACCEPTANCE_LOAD!=='isolated') throw new Error('Run scripts/acceptance.mjs --load');
@@ -12,15 +12,16 @@ async function request(path,body,headers={}) {
   if(!result.ok) throw new Error(path+' '+result.status+' '+await result.text());
   return result;
 }
+const {submit,decide}=client(process.env.SH_API_URL,token);
 const agent=(await (await request('/agents',{name:'load'})).json()).agentId;
 const revision=(await (await request('/agents/'+agent+'/revisions',{model:'local-echo',prompt:'test',outputMode:'APPROVED_ARTIFACT'})).json()).agentRevisionId;
 const started=performance.now();
 const runs=await Promise.all(Array.from({length:count},async(_,i)=>{
   const conv=await (await request('/conversations',{agentId:agent,agentRevisionId:revision})).json();
   const begin=performance.now();
-  const result=await (await request('/runs',{conversationId:conv.conversationId,input:{type:'text',text:'load '+i}},{'Idempotency-Key':randomUUID()})).json();
+  const run=await submit(conv.conversationId,'load '+i);
   submitted.push(performance.now()-begin);
-  return result.runId;
+  return run;
 }));
 let connected=0;
 async function read(run) {
@@ -38,7 +39,7 @@ const approve=async()=>{
     if(connected===count*copies) {
       const approvals=await (await request('/approvals')).json();
       await Promise.all(approvals.filter(a=>pending.has(a.runId)).map(async a=>{
-        await request('/approvals/'+a.id+'/decision',{approve:true,argsHash:a.argsHash});pending.delete(a.runId);
+        await decide(a,true);pending.delete(a.runId);
       }));
     }
     await sleep(250);

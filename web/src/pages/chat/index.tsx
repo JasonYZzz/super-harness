@@ -197,12 +197,6 @@ const ChatPageInner = () => {
 			...(seedConfig?.chat_model_config
 				? { chat_model_config: seedConfig.chat_model_config }
 				: {}),
-			...(seedConfig?.fallback_chat_model_config
-				? { fallback_chat_model_config: seedConfig.fallback_chat_model_config }
-				: {}),
-			...(seedConfig?.realtime_model_config
-				? { realtime_model_config: seedConfig.realtime_model_config }
-				: {}),
 		});
 		navigate(`/chat/${urlAgentId}/${res.session_id}`);
 	};
@@ -521,6 +515,7 @@ const ChatPageInner = () => {
 			</Sidebar>
 			<div className="flex flex-1 min-w-0">
 				<ChatViewport
+					key={effectiveSessionId}
 					agentId={effectiveAgentId}
 					sessionId={effectiveSessionId}
 					onSessionsChanged={refetchSessions}

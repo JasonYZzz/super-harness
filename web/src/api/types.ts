@@ -222,9 +222,6 @@ export interface CreateSessionResponse {
 	session_id: string;
 }
 
-export interface InterruptSessionResponse {
-	session_id: string;
-}
 
 export interface UpdateSessionRequest {
 	name?: string;
@@ -272,7 +269,7 @@ export interface SessionListResponse {
 
 /**
  * Response body for `GET /schedule/{id}/sessions`. Returns plain
- * `SessionRecord[]` (no team / is_running enrichment) because
+ * `SessionRecord[]` (no team or status enrichment) because
  * scheduled-execution sessions are listed for audit purposes only,
  * not for opening in the chat UI.
  */
@@ -389,28 +386,9 @@ export interface TeamDetailResponse {
  */
 export type SessionStatus = 'running' | 'idle' | 'awaiting_permission' | 'awaiting_external_result';
 
-/**
- * Per-session bundle returned by `GET /sessions/?agent_id=...`.
- *
- * Bundles what the chat UI needs to render a session without follow-up
- * requests: the persisted record, its status, and — when the session
- * participates in a team — the resolved team detail.
- */
+/** Metadata for the session list. Chat messages and plans come from AG-UI. */
 export interface SessionView {
-	/**
-	 * The record with the bulk of `state` stripped: `context`, `summary`
-	 * and `tool_context` arrive cleared, since they hold the model's
-	 * conversation and every file it has read. `permission_context` and
-	 * `tasks_context` survive — the panels seed from them. Messages come
-	 * from `GET /sessions/{id}/messages`.
-	 */
 	session: SessionRecord;
-	/**
-	 * @deprecated Use {@link status}. True only while a worker holds the
-	 * run lease, which a session parked on a confirmation prompt does
-	 * not — so this reads `false` for a session visibly waiting on you.
-	 */
-	is_running: boolean;
 	/** Exactly one applies at a time, so one indicator renders it. */
 	status: SessionStatus;
 	team: TeamDetailResponse | null;
@@ -497,13 +475,6 @@ export interface CredentialListResponse {
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
 export type { Msg, ContentBlock } from '@agentscope-ai/agentscope/message';
-export type { AgentEvent } from '@agentscope-ai/agentscope/event';
-import type {
-	UserConfirmResultEvent,
-	ExternalExecutionResultEvent,
-} from '@agentscope-ai/agentscope/event';
-import type { Msg } from '@agentscope-ai/agentscope/message';
-
 export interface ClientExternalToolDefinition {
 	name: string;
 	description: string;
@@ -511,13 +482,6 @@ export interface ClientExternalToolDefinition {
 	input_schema: Record<string, unknown>;
 }
 
-export interface ChatRequest {
-	agent_id: string;
-	session_id: string;
-	input: Msg | Msg[] | UserConfirmResultEvent | ExternalExecutionResultEvent | null;
-	client_external_tools?: ClientExternalToolDefinition[];
-	client_builtin_tools?: Array<'AskUser'>;
-}
 
 // ─── MCP ──────────────────────────────────────────────────────────────────────
 
@@ -742,21 +706,14 @@ export interface MCPView {
 	version: string | null;
 }
 
-/**
- * One skill in the user's own library. Unlike an MCP, the skill's files are
- * not stored — the record says where they came from, and the archive is
- * re-fetched from the hub when the skill reaches a workspace.
- */
+/** A published skill version in the current tenant. Agent revisions pin it by id. */
 export interface SkillView {
 	id: string;
-	/** Unique per user — the handle a workspace refers to it by. */
 	name: string;
 	enabled: boolean;
 	display_name: string | null;
 	description: string;
 	tags: string[];
-	/** Snapshotted from the card at install time, so the library keeps the
-	 *  identity of the listing it came from. */
 	author: string | null;
 	icon_url: string | null;
 	url: string | null;

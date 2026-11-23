@@ -20,7 +20,7 @@ Java 21，SDK 2.0.5。HelloHarnessTest 覆盖两轮上下文、事件类型、�
 | CosDistributedStore | [源码](https://github.com/agentscope-ai/agentscope-java/blob/v2.0.5/agentscope-extensions/agentscope-extensions-cos/src/main/java/io/agentscope/extensions/cos/CosDistributedStore.java) |
 | OssDistributedStore | [源码](https://github.com/agentscope-ai/agentscope-java/blob/v2.0.5/agentscope-extensions/agentscope-extensions-oss/src/main/java/io/agentscope/extensions/oss/OssDistributedStore.java) |
 
-兼容矩阵与 main 的 Durable Turn 映射见 [ADR-001](../../super-harness_codex_研发启动包/docs/ADR-001-UPSTREAM-BASELINE.md)。
+兼容矩阵与 main 的 Durable Turn 映射见 [ADR-001](https://github.com/JasonYZzz/super-harness/blob/b771adf78d50286f247935cd3cf59d24374a5e64/super-harness_codex_研发启动包/docs/ADR-001-UPSTREAM-BASELINE.md)。
 
 ## 运行时存储验收
 

@@ -2,6 +2,8 @@ package io.superharness.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.superharness.contract.AguiInput;
+
 import java.io.*;
 import java.time.Instant;
 import java.util.*;
@@ -60,6 +62,41 @@ final class AguiProjection {
         emit("RUN_STARTED", Map.of("threadId", input.threadId(), "runId", input.runId()));
     }
 
+    void acknowledge(UUID task) throws IOException {
+        start();
+        finish(Map.of("type", "success"), Map.of("taskId", task));
+    }
+
+    void threadSnapshot(Optional<AguiThreads.ThreadView> snapshot) throws IOException {
+        start();
+        if (snapshot.isEmpty()) {
+            finish(Map.of("type", "success"), Map.of("unchanged", true));
+            return;
+        }
+        var view = snapshot.get();
+        emit("MESSAGES_SNAPSHOT", Map.of("messages", view.messages()));
+        emit("STATE_SNAPSHOT", Map.of("snapshot", view.state()));
+        var metadata =
+                Map.of(
+                        "cursor",
+                        view.cursor(),
+                        "turns",
+                        view.turns(),
+                        "tools",
+                        view.tools(),
+                        "archived",
+                        view.archived(),
+                        "revisionId",
+                        view.revisionId(),
+                        "capabilities",
+                        view.capabilities());
+        var outcome =
+                view.interrupts().isEmpty()
+                        ? Map.of("type", "success")
+                        : Map.of("type", "interrupt", "interrupts", view.interrupts());
+        finish(outcome, metadata);
+    }
+
     void error(String code) throws IOException {
         log.info(
                 "AG-UI run error thread={} interaction={} task={} code={}",
@@ -72,10 +109,17 @@ final class AguiProjection {
     }
 
     private void finish(Map<String, ?> outcome) throws IOException {
+        finish(outcome, null);
+    }
+
+    private void finish(Map<String, ?> outcome, Map<String, ?> result) throws IOException {
         closeText();
-        emit(
-                "RUN_FINISHED",
-                Map.of("threadId", input.threadId(), "runId", input.runId(), "outcome", outcome));
+        var fields = new LinkedHashMap<String, Object>();
+        fields.put("threadId", input.threadId());
+        fields.put("runId", input.runId());
+        fields.put("outcome", outcome);
+        if (result != null) fields.put("result", result);
+        emit("RUN_FINISHED", fields);
     }
 
     private String messageId() {
@@ -89,12 +133,16 @@ final class AguiProjection {
         }
     }
 
-    private void delta(String text) throws IOException {
-        if (text.isEmpty()) return;
+    private void openText() throws IOException {
         if (!open) {
             emit("TEXT_MESSAGE_START", Map.of("messageId", messageId(), "role", "assistant"));
             open = true;
         }
+    }
+
+    private void delta(String text) throws IOException {
+        if (text.isEmpty()) return;
+        openText();
         draft.append(text);
         emit("TEXT_MESSAGE_CONTENT", Map.of("messageId", messageId(), "delta", text));
     }
@@ -107,18 +155,39 @@ final class AguiProjection {
         return Map.of("inputTokens", in, "outputTokens", output, "totalTokens", in + output);
     }
 
+    /** A fresh observer has no local user message or history to seed the SDK reducer. */
+    boolean acceptForReader(Map<String, Object> row) throws IOException {
+        boolean terminal = accept(row);
+        if ("run.accepted".equals(row.get("type"))) {
+            snapshot();
+            emitState();
+        }
+        return terminal;
+    }
+
     @SuppressWarnings("unchecked")
     boolean accept(Map<String, Object> row) throws IOException {
         String type = row.get("type").toString();
         sequence = ((Number) row.get("seq")).longValue();
         int next = ((Number) row.get("attempt")).intValue();
         timestamp = Instant.parse(row.get("createdAt").toString()).toEpochMilli();
+        // A resume starts after the interrupt. Its client can hold a plan that this
+        // projection never saw, so a rolled-back attempt must still publish its state.
+        boolean rolledBack =
+                Set.of("run.failed", "run.cancelled", "run.recovery_required").contains(type);
+        boolean resetPlan =
+                (tasks != null && attempt != next)
+                        || (rolledBack && (tasks != null || resumed != null));
         if (attempt != next) {
             closeText();
             attempt = next;
             draft.setLength(0);
         }
         var p = (Map<String, Object>) row.get("payload");
+        if (resetPlan) {
+            tasks = AguiHistory.read(history.apply(sequence), proposals, mapper).tasks();
+            emitState();
+        }
         switch (type) {
             case "run.accepted" -> {
                 start();
@@ -150,17 +219,18 @@ final class AguiProjection {
                                     tokens(inputTokens, outputTokens)));
                 }
             }
-            case "tool.started" ->
-                    custom(
-                            "harness.tool.started",
-                            Map.of("name", p.get("name"), "mode", p.get("mode")));
+            case "tool.started" -> {
+                openText();
+                custom("harness.tool.started", AguiHistory.tool(row, p));
+            }
             case "approval.required" -> {
                 UUID id = UUID.fromString(p.get("approvalId").toString());
                 interrupt(id, proposals.apply(id));
                 return true;
             }
             case "tool.completed" -> {
-                if (resumed != null) toolResult(Map.of("receipt", p.get("receipt")));
+                if (resumed != null)
+                    toolResult(resumed.get("toolCallId"), Map.of("receipt", p.get("receipt")));
             }
             case "run.completed" -> {
                 if (resumed == null) canonical((String) p.get("text"));
@@ -169,7 +239,7 @@ final class AguiProjection {
             }
             case "run.cancelled", "run.failed" -> {
                 var code = p.getOrDefault("code", "CANCELLED").toString();
-                if (resumed != null) toolResult(Map.of("code", code));
+                if (resumed != null) toolResult(resumed.get("toolCallId"), Map.of("code", code));
                 error(code);
                 return true;
             }
@@ -192,8 +262,7 @@ final class AguiProjection {
                 Map.of("snapshot", Map.of("tasks", tasks == null ? List.of() : tasks)));
     }
 
-    private void toolResult(Map<String, ?> value) throws IOException {
-        var tool = resumed.get("toolCallId");
+    private void toolResult(Object tool, Map<String, ?> value) throws IOException {
         emit(
                 "TOOL_CALL_RESULT",
                 Map.of(
@@ -207,6 +276,17 @@ final class AguiProjection {
                         mapper.writeValueAsString(value)));
     }
 
+    void reviewReceipt(UUID tool, boolean approved) throws IOException {
+        start();
+        if (approved) {
+            toolResult(tool, Map.of("receipt", tool));
+            finish(Map.of("type", "success"));
+        } else {
+            toolResult(tool, Map.of("code", "APPROVAL_REJECTED"));
+            error("APPROVAL_REJECTED");
+        }
+    }
+
     private void canonical(String text) throws IOException {
         String collected = draft.toString();
         if (text.startsWith(collected)) delta(text.substring(collected.length()));
@@ -218,13 +298,10 @@ final class AguiProjection {
 
     private void interrupt(UUID id, Map<String, Object> proposal) throws IOException {
         canonical((String) proposal.get("text"));
-        if (draft.isEmpty() && !open) {
-            emit("TEXT_MESSAGE_START", Map.of("messageId", messageId(), "role", "assistant"));
-            open = true;
-        }
+        if (draft.isEmpty()) openText();
         closeText();
-        Object tool = proposal.get("toolCallId"), hash = proposal.get("argsHash");
-        String args = arguments(proposal);
+        Object tool = proposal.get("toolCallId");
+        String args = AguiHistory.arguments(mapper, proposal);
         emit(
                 "TOOL_CALL_START",
                 Map.of(
@@ -238,146 +315,17 @@ final class AguiProjection {
         emit("TOOL_CALL_END", Map.of("toolCallId", tool));
         snapshot();
         emitState();
-        var schema =
+        finish(
                 Map.of(
                         "type",
-                        "object",
-                        "required",
-                        List.of("approved", "argsHash"),
-                        "additionalProperties",
-                        false,
-                        "properties",
-                        Map.of(
-                                "approved",
-                                Map.of("type", "boolean"),
-                                "argsHash",
-                                Map.of("type", "string", "pattern", "^[a-f0-9]{64}$")));
-        var interrupt =
-                Map.of(
-                        "id",
-                        id,
-                        "reason",
-                        "tool_call",
-                        "toolCallId",
-                        tool,
-                        "message",
-                        "发布 response.txt？",
-                        "expiresAt",
-                        proposal.get("expiresAt"),
-                        "responseSchema",
-                        schema,
-                        "metadata",
-                        Map.of(
-                                "ag-ui:tool-execution",
-                                "server",
-                                "argsHash",
-                                hash,
-                                "canDecide",
-                                proposal.get("canDecide")));
-        finish(Map.of("type", "interrupt", "interrupts", List.of(interrupt)));
+                        "interrupt",
+                        "interrupts",
+                        List.of(AguiHistory.interrupt(id, proposal))));
     }
 
-    private String arguments(Map<String, Object> proposal) throws IOException {
-        // JSON is also the string-valued tool arguments in messages. Order must survive JVM
-        // restarts.
-        return mapper.writeValueAsString(
-                new TreeMap<>(
-                        Map.of(
-                                "fileName",
-                                "response.txt",
-                                "bytes",
-                                proposal.get("bytes"),
-                                "argsHash",
-                                proposal.get("argsHash"))));
-    }
-
-    @SuppressWarnings("unchecked")
     private void snapshot() throws IOException {
-        var messages = new ArrayList<Map<String, Object>>();
-        Map<String, Object> reply = null;
-        StringBuilder text = null;
-        Object pendingTool = null;
-        Object snapshotTasks = List.of();
-        for (var event : history.apply(sequence)) {
-            String id = event.get("runId") + "-" + event.get("attempt");
-            var payload = (Map<String, Object>) event.get("payload");
-            String type = (String) event.get("type");
-            if (type.equals("run.accepted")) {
-                messages.add(
-                        Map.of(
-                                "id",
-                                Objects.requireNonNullElse(
-                                        event.get("messageId"), event.get("runId") + "-input"),
-                                "role",
-                                "user",
-                                "content",
-                                event.get("input")));
-                reply = null;
-                pendingTool = null;
-                continue;
-            }
-            if (type.equals("plan.updated")) {
-                snapshotTasks = payload.get("tasks");
-                continue;
-            }
-            if (type.equals("text.delta")
-                    || type.equals("run.completed")
-                    || type.equals("approval.required")) {
-                if (reply == null || !reply.get("id").equals(id)) {
-                    reply =
-                            new LinkedHashMap<>(
-                                    Map.of("id", id, "role", "assistant", "content", ""));
-                    messages.add(reply);
-                    text = new StringBuilder();
-                }
-                if (type.equals("text.delta")) {
-                    text.append(payload.get("text"));
-                    // Materialize once at the boundary, even for long streams of small deltas.
-                    reply.put("content", text);
-                } else if (type.equals("run.completed")) reply.put("content", payload.get("text"));
-                else {
-                    var proposal =
-                            proposals.apply(UUID.fromString(payload.get("approvalId").toString()));
-                    pendingTool = proposal.get("toolCallId");
-                    reply.put("content", proposal.get("text"));
-                    reply.put(
-                            "toolCalls",
-                            List.of(
-                                    Map.of(
-                                            "id",
-                                            pendingTool,
-                                            "type",
-                                            "function",
-                                            "function",
-                                            Map.of(
-                                                    "name",
-                                                    "publish_text",
-                                                    "arguments",
-                                                    arguments(proposal)))));
-                }
-            }
-            if (pendingTool != null
-                    && (type.equals("tool.completed")
-                            || type.equals("run.failed")
-                            || type.equals("run.cancelled"))) {
-                var value =
-                        type.equals("tool.completed")
-                                ? Map.of("receipt", pendingTool)
-                                : Map.of("code", payload.getOrDefault("code", "CANCELLED"));
-                messages.add(
-                        Map.of(
-                                "id",
-                                pendingTool + "-result",
-                                "role",
-                                "tool",
-                                "toolCallId",
-                                pendingTool,
-                                "content",
-                                mapper.writeValueAsString(value)));
-                pendingTool = null;
-            }
-        }
-        tasks = snapshotTasks;
-        emit("MESSAGES_SNAPSHOT", Map.of("messages", messages));
+        var view = AguiHistory.read(history.apply(sequence), proposals, mapper);
+        tasks = view.tasks();
+        emit("MESSAGES_SNAPSHOT", Map.of("messages", view.messages()));
     }
 }

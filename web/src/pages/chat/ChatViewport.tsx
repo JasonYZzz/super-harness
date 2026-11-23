@@ -20,7 +20,7 @@ import {
 	X,
 } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { api, createSession, http, signedIn } from '@/api/harness';
@@ -54,20 +54,12 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { Tabs, TabsList, TabsContent, TabsTrigger } from '@/components/ui/tabs';
-import { useHarnessChat, type Turn } from '@/hooks/useHarnessChat';
+import type { Turn } from '@/hooks/useAguiThread';
+import { useHarnessChat } from '@/hooks/useHarnessChat';
 import { useSessions } from '@/hooks/useSessions';
 import { useTranslation } from '@/i18n/useI18n';
 
-type Approval = {
-	id: string;
-	runId: string;
-	tool: string;
-	preview: string;
-	argsHash: string;
-	canDecide: boolean;
-	expiresAt: string;
-};
-function Runs({ turns, refresh }: { turns: Turn[]; refresh: () => void }) {
+function Runs({ turns, recover, usage }: { turns: Turn[]; recover: (turn: Turn) => Promise<void>; usage?: number }) {
 	const [expanded, setExpanded] = useState('');
 	const trace = useQuery({
 		queryKey: ['trace', expanded],
@@ -81,6 +73,7 @@ function Runs({ turns, refresh }: { turns: Turn[]; refresh: () => void }) {
 	});
 	return (
 		<div className="flex flex-col gap-2 p-2">
+			{usage != null && <p className="text-xs text-muted-foreground">本轮用量 {usage} tokens</p>}
 			{turns.map((r) => (
 				<Button
 					key={r.runId}
@@ -103,8 +96,7 @@ function Runs({ turns, refresh }: { turns: Turn[]; refresh: () => void }) {
 						{r.status === 'RECOVERY_REQUIRED' && (
 							<Button
 								onClick={() =>
-									api('/runs/' + r.runId + '/resume', 'POST', {})
-										.then(refresh)
+									recover(r)
 										.catch((e) => toast.error(String(e)))
 								}
 							>
@@ -229,12 +221,10 @@ export function ChatViewport({
 		cache = useQueryClient();
 	const { sessions } = useSessions(agentId),
 		session = sessions.find((v) => v.session.id === sessionId)?.session;
-	const approvals = useQuery({
-		queryKey: ['harness-approvals'],
-		enabled: signedIn(),
-		queryFn: () => api<Approval[]>('/approvals'),
-		refetchInterval: 4000,
-	});
+	const latestTurn = chat.active ?? chat.turns.at(-1);
+	useEffect(() => {
+		if (latestTurn?.runId) onSessionsChanged?.();
+	}, [latestTurn?.runId, latestTurn?.status, onSessionsChanged]);
 	const { t } = useTranslation();
 	const [modelHelp, setModelHelp] = useState(false);
 	const [savingModel, setSavingModel] = useState(false);
@@ -310,11 +300,11 @@ export function ChatViewport({
 	);
 	const openedPlan = useRef<string | null>(null);
 	useEffect(() => {
-		if (sessionId && chat.plan?.payload.tasks?.length && openedPlan.current !== sessionId) {
+		if (sessionId && chat.state.tasks.length && openedPlan.current !== sessionId) {
 			openedPlan.current = sessionId;
 			setPanelLayout((layout) => openPanelInLayout(layout, 'plan'));
 		}
-	}, [sessionId, chat.plan]);
+	}, [sessionId, chat.state.tasks]);
 	async function changePermission(mode: PermissionMode) {
 		if (!sessionId || savingModel) return;
 		setSavingModel(true);
@@ -338,48 +328,17 @@ export function ChatViewport({
 		runs: t('harness.runs'),
 	};
 
-	const refresh = () => {
-		void cache.invalidateQueries({ queryKey: ['harness-history', sessionId] });
-		void approvals.refetch();
-		onSessionsChanged?.();
-	};
-	const decide = async (a: Approval, approve: boolean) => {
-		try {
-			await api('/approvals/' + a.id + '/decision', 'POST', {
-				approve,
-				argsHash: a.argsHash,
-			});
-			refresh();
-		} catch (e) {
-			toast.error(String(e));
-			throw e;
-		}
-	};
-	const pending = approvals.data?.find((a) => chat.turns.some((r) => r.runId === a.runId));
-	const approvalCard = pending?.canDecide ? (
-		<ConfirmCard
-			key={pending.id}
-			toolCall={
-				{
-					id: pending.id,
-					type: 'tool_call',
-					name: pending.tool,
-					state: 'asking',
-					input: JSON.stringify({
-						preview: pending.preview,
-						argsHash: pending.argsHash,
-						expiresAt: pending.expiresAt,
-					}),
-					created_at: chat.turns.find((r) => r.runId === pending.runId)!.createdAt,
-				} as ToolCallBlock
-			}
-			onUserConfirm={(ok) => decide(pending, ok)}
-		/>
-	) : pending ? (
-		<span>等待审批 · {pending.tool}</span>
-	) : null;
+	const pending = chat.interrupt;
+	const decide = async (approve: boolean) => chat.decide(approve);
+	const approvalCard = pending && !chat.busy && (pending.metadata?.canDecide ? (
+		<ConfirmCard key={pending.id} toolCall={{
+			id: pending.toolCallId ?? pending.id, type: 'tool_call', name: 'publish_text', state: 'asking',
+			input: JSON.stringify({ preview: pending.metadata.preview, argsHash: pending.metadata.argsHash, expiresAt: pending.expiresAt }),
+			created_at: chat.active?.createdAt ?? '',
+		} satisfies ToolCallBlock} onUserConfirm={decide} />
+	) : <span>{pending.message} · 等待审批</span>);
 	const permissionRules = createPermissionContext(session?.state.permission_mode as SdkMode);
-	if (session?.state.publish_approval) {
+	if (chat.capabilities.humanInTheLoop.interrupts) {
 		permissionRules.ask_rules.publish_text = [
 			{
 				tool_name: 'publish_text',
@@ -393,7 +352,7 @@ export function ChatViewport({
 		runs: {
 			title: labels.runs,
 			icon: <History className="size-4" />,
-			content: <Runs turns={chat.turns} refresh={refresh} />,
+			content: <Runs turns={chat.turns} recover={turn => chat.control(turn, 'recover')} usage={chat.usage} />,
 		},
 		mcp: { title: 'MCP', icon: <Cable className="size-4" />, content: null },
 		skill: { title: labels.skill, icon: <BookText className="size-4" />, content: null },
@@ -408,7 +367,7 @@ export function ChatViewport({
 			content: (
 				<TaskPanel
 					tasksContext={
-						chat.plan?.payload.tasks ? { tasks: chat.plan.payload.tasks } : null
+						chat.state.tasks.length ? chat.state : null
 					}
 				/>
 			),
@@ -440,31 +399,17 @@ export function ChatViewport({
 			content: (
 				<div className="space-y-3 p-3 text-sm">
 					<PermissionPanel permissionContext={permissionRules} />
-					{approvals.data
-						?.filter((a) => chat.turns.some((r) => r.runId === a.runId))
-						.map((a) => (
-							<div key={a.id} className="rounded-lg border p-2">
-								<b>{a.tool}</b>
-								<pre className="whitespace-pre-wrap">{a.preview}</pre>
-								{a.canDecide && (
-									<>
-										<Button
-											size="sm"
-											onClick={() => void decide(a, true).catch(() => {})}
-										>
-											批准
-										</Button>
-										<Button
-											variant="ghost"
-											size="sm"
-											onClick={() => void decide(a, false).catch(() => {})}
-										>
-											拒绝
-										</Button>
-									</>
-								)}
-							</div>
-						))}
+					{pending && (
+						<div className="rounded-lg border p-2">
+							<b>{pending.message}</b>
+							<pre className="whitespace-pre-wrap">{String(pending.metadata?.preview ?? '')}</pre>
+							{pending.metadata?.canDecide && <>
+								<Button size="sm" disabled={chat.busy} onClick={() => chat.decide(true)}>批准</Button>
+								<Button size="sm" disabled={chat.busy} variant="ghost" onClick={() => chat.decide(false)}>拒绝</Button>
+							</>}
+							<Button size="sm" disabled={chat.busy} variant="ghost" onClick={() => chat.decide(null)}>放弃发布</Button>
+						</div>
+					)}
 				</div>
 			),
 		},
@@ -595,11 +540,6 @@ export function ChatViewport({
 												</DropdownMenuCheckboxItem>
 											),
 										)}
-										{sessionId && (
-											<DropdownMenuItem asChild>
-												<Link to={'/ag-ui/' + sessionId}>在 AG-UI 客户端打开</Link>
-											</DropdownMenuItem>
-										)}
 									</DropdownMenuContent>
 								</DropdownMenu>
 							</div>
@@ -608,17 +548,12 @@ export function ChatViewport({
 							<ChatContent
 								className="max-w-[var(--chat-content-w)] w-full"
 								msgs={chat.msgs}
-								loading={chat.loading}
-								phase={chat.active ? 'streaming' : 'idle'}
-								queuedCount={0}
-								queuedItems={[]}
-								queueReorderDisabled
-								activeReplyId={chat.active?.runId ?? null}
-								disabled={!signedIn() || !sessionId || savingModel}
+								loading={!!sessionId && !chat.cursor && chat.busy}
+								phase={chat.active?.status === 'CANCEL_REQUESTED' ? 'interrupting' : chat.active ? 'streaming' : 'idle'}
+								disabled={!signedIn() || !chat.canSend || savingModel}
 								onSend={async (blocks) => {
 									try {
-										await chat.send(blocks);
-										onSessionsChanged?.();
+										chat.send(blocks.filter(b => b.type === 'text').map(b => b.text).join('\n'));
 									} catch (e) {
 										toast.error(String(e));
 										throw e;
@@ -626,23 +561,10 @@ export function ChatViewport({
 								}}
 								onInterrupt={() => {
 									if (chat.active)
-										void api(
-											'/runs/' + chat.active.runId + '/cancel',
-											'POST',
-											{},
-										)
-											.then(refresh)
+										void chat.control(chat.active, 'cancel')
 											.catch((e) => toast.error(String(e)));
 								}}
-								onUserConfirm={unavailable}
-								onClientExternalToolResult={unavailable}
-								onExternalExecutionResult={unavailable}
-								onUpdateQueued={unavailable}
-								onDeleteQueued={unavailable}
-								onSteerQueued={unavailable}
-								onMoveQueued={unavailable}
-								onReorderQueued={unavailable}
-								allowedInputTypes={['text/plain']}
+								allowedInputTypes={chat.capabilities.inputContentTypes}
 								fileProcessor={async (file) => {
 									if (file.type !== 'text/plain')
 										throw new Error('Unsupported file type');
@@ -662,7 +584,8 @@ export function ChatViewport({
 								footerSlot={approvalCard}
 							/>
 						</div>
-						{chat.error && <p role="alert">{chat.error.message}</p>}
+						{chat.error && <p role="alert">{chat.error}</p>}
+						{chat.retry && <Button onClick={chat.refresh}>重新连接</Button>}
 					</div>
 				</ResizablePanel>
 				{dockLayout.length > 0 && (

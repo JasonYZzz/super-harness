@@ -6,7 +6,6 @@ import type {
 	Msg,
 	TextBlock,
 	ThinkingBlock,
-	ToolCallBlock,
 	ToolResultBlock,
 } from '@agentscope-ai/agentscope/message';
 import { format, isToday } from 'date-fns';
@@ -460,12 +459,7 @@ function summarizeToolGroup(calls: ToolCallWithResult[], t: TFunction) {
 
 interface MessageBubbleProps {
 	message: Msg;
-	onUserConfirm: (
-		toolCallBlock: ToolCallBlock,
-		confirm: boolean,
-		replyId: string,
-		rules?: ToolCallBlock['suggested_rules'],
-	) => void;
+
 }
 
 /**
@@ -611,13 +605,6 @@ function ASMessageBubbleComponent({ message }: MessageBubbleProps) {
 	);
 }
 
-/**
- * Memoised: a streaming reply publishes a new `Msg` object on every delta
- * (see ``useMessages``) while the messages around it keep their identity,
- * so only the bubble that actually changed re-renders. A message mutated
- * in place would therefore *not* repaint — new content has to arrive as a
- * new object.
- */
 export const ASMessageBubble = memo(ASMessageBubbleComponent);
 
 /**

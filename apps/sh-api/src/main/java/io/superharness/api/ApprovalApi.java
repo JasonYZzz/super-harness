@@ -2,9 +2,6 @@ package io.superharness.api;
 
 import io.superharness.runengine.*;
 
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.*;
-
 import org.springframework.http.*;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -24,20 +21,9 @@ class ApprovalApi {
         this.artifacts = artifacts;
     }
 
-    record Decision(
-            @NotNull Boolean approve, @NotNull @Pattern(regexp = "[a-f0-9]{64}") String argsHash) {}
-
     @GetMapping("/approvals")
     Object pending(@AuthenticationPrincipal Jwt jwt) {
         return approvals.pending(Identity.principal(jwt));
-    }
-
-    @PostMapping("/approvals/{id}/decision")
-    void decide(
-            @AuthenticationPrincipal Jwt jwt,
-            @PathVariable UUID id,
-            @Valid @RequestBody Decision d) {
-        approvals.decide(Identity.principal(jwt), id, d.argsHash(), d.approve());
     }
 
     @GetMapping("/runs/{id}/artifacts")

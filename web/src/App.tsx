@@ -72,10 +72,6 @@ const router = createBrowserRouter([
 						path: '/chat/:agentId?/:sessionId?/:memberId?',
 						element: <ChatPage />,
 					},
-					{
-						path: '/ag-ui/:threadId',
-						lazy: async () => ({ Component: (await import('./pages/agui')).default }),
-					},
 					{ path: '/schedule', element: <SchedulePage /> },
 					{ path: '/channel', element: <HttpChannels /> },
 					{ path: '/credential', element: <CredentialPage /> },

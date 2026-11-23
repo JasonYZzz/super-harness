@@ -13,7 +13,10 @@ export async function http(path: string, init: RequestInit = {}) {
 		sessionStorage.removeItem('harness.access');
 		window.location.replace('/setup');
 	}
-	if (!res.ok) throw new Error((await res.json().catch(() => ({}))).code ?? 'HTTP ' + res.status);
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({}));
+		throw Object.assign(new Error(body.code ?? 'HTTP ' + res.status), { status: res.status });
+	}
 	return res;
 }
 export async function api<T>(
@@ -150,7 +153,6 @@ export async function sessions(agentId: string) {
 						? 'running'
 						: 'idle',
 			team: null,
-			is_running: r.status === 'RUNNING',
 		}),
 	);
 	return { sessions: list, total: list.length };

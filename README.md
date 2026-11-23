@@ -23,15 +23,13 @@ AGENTSCOPE_MYSQL_DATABASE=super_harness_runtime
 ./scripts/dev-up.sh --build
 ```
 
-打开 [AgentScope 聊天页](http://127.0.0.1:8080/)，在本地设置页输入用户名 `admin` 和密码 `admin`，点击「开始使用」。本地账号映射到原有 `local/developer` 工作区，可继续使用已有会话。设置页支持退出和开发令牌登录，命令行可继续使用 `./scripts/dev-token.sh`。本地 JWT 有效期一小时，账号密码可用 `SH_LOCAL_USERNAME` 和 `SH_LOCAL_PASSWORD` 覆盖。生产 profile 使用 OIDC。在左侧 Agent 栏点加号创建并发布 Agent，点「新会话」后即可发送消息。右上角「面板 → 计划」展示模型创建的任务。「运行记录」展示每轮运行、追踪和产物。启用审批的 Agent 会在输入框上方展示官方确认卡。
+打开 [AgentScope 聊天页](http://127.0.0.1:8080/)，在本地设置页输入用户名 `admin` 和密码 `admin`，点击「开始使用」。本地密码登录和普通开发令牌使用同一身份 `local/developer`，首次初始化为租户 OWNER。修改登录名后仍使用该身份，实际权限由成员表决定。设置页支持退出和开发令牌登录，命令行可继续使用 `./scripts/dev-token.sh`。本地 JWT 有效期一小时，账号密码可用 `SH_LOCAL_USERNAME` 和 `SH_LOCAL_PASSWORD` 覆盖。生产 profile 使用 OIDC。在左侧 Agent 栏点加号创建并发布 Agent，点「新会话」后即可发送消息。右上角「面板 → 计划」展示模型创建的任务。「运行记录」展示每轮运行、追踪和产物。启用审批的 Agent 会在输入框上方展示官方确认卡。
 
 开发签名密钥在首次启动时生成，默认保存在 `~/.config/super-harness/dev-jwt.key`。使用 `./scripts/dev-down.sh` 停止服务。日志位于 `.local/{api,worker,reconciler}.log`。运行集成测试和 Docker 沙箱需要可用的 Docker 服务。
 
 ### 使用 AG-UI 客户端
 
-在已有会话右上角选「面板 → 在 AG-UI 客户端打开」。页面与控制台共用登录身份和会话，可查看流式回答、执行计划及本轮用量。Agent 启用发布审批时，可以核对回答与参数摘要，批准后直接下载 `response.txt`。同一标签页刷新后会恢复当前交互。
-
-其他客户端可使用 `@ag-ui/client@1.0.5` 的 `HttpAgent`，携带 Bearer JWT 向 `POST /api/v1/ag-ui/runs` 发送请求。用会话 UUID 作 `threadId`，每个新回合生成一个 `runId`，重试沿用原值。审批续接使用新的 `runId` 和服务端发出的 `interruptId`。[请求样例](docs/api/openapi.json) · [协议与审批流程](docs/ag-ui-implementation-plan.md)
+聊天统一使用 `/chat`。所有交互式 Agent 通过 `POST /api/v1/ag-ui/runs` 发送消息、恢复会话、只读跟随已有任务、答复审批、取消及故障恢复。携带 Bearer JWT 的官方 `HttpAgent` 可以直接使用该入口。新标签页打开同一聊天地址即可继续处理待决审批。关闭页面只断开订阅，显式取消才停止平台任务。[协议与接入示例](docs/ag-ui.md) · [OpenAPI](docs/api/openapi.json)
 
 ### 设置聊天模型
 
@@ -59,7 +57,7 @@ AGENTSCOPE_MYSQL_DATABASE=super_harness_runtime
 | 任务 | 提交、查看状态、流式输出、事件重播、取消、恢复、产物下载、查看模型调用与 Token |
 | 审批 | 查看文本预览、大小和动作摘要。服务端核验角色、有效期与摘要，重复决定复用同一回执 |
 | 资源与租户 | 技能中心和知识库分别提供技能版本与个人记忆管理入口。成员、配额和审计使用 Java 租户 API |
-| HTTP | 已认证的 `/v3/api-docs` 和 `/v3/api-docs.yaml` 提供 OpenAPI。提交任务需 `Idempotency-Key`，SSE 接受 `Last-Event-ID: runId:seq` |
+| HTTP | 已认证的 `/v3/api-docs` 和 `/v3/api-docs.yaml` 提供 OpenAPI。平台任务事件流接受 `Last-Event-ID: runId:seq`。AG-UI 客户端使用协议 runId 重放 |
 
 `SH_STORE_BACKEND` 决定 SDK 存储。默认 `jdbc` 使用独立连接池，也能用 `SH_RUNTIME_JDBC_URL`、`SH_RUNTIME_JDBC_USER`、`SH_RUNTIME_JDBC_PASSWORD` 指向 MySQL、PostgreSQL、SQLite 或 H2。其他后端有 `redis`、`mongodb`、`oss`、`cos`。OSS/COS 使用对象存储承担工作区与快照，由 JDBC 承担带版本状态和执行锁。API 与 Worker 的 `SH_STORE_PROFILE`、`SH_STORE_VERSION` 必须对应同一份后端配置。更换存储时发布新 profile 版本，并保留旧 Worker 直到旧会话退出。[存储兼容记录](docs/upstream/API-COMPATIBILITY.md)
 
@@ -79,7 +77,7 @@ SH_SANDBOX_IMAGE=super-harness-sandbox:local ./scripts/dev-up.sh
 ./scripts/acceptance.mjs --browser --load --restore
 ```
 
-`smoke.mjs` 对运行中的本地服务创建独立测试会话。`acceptance.mjs` 使用已构建的 jar、自有临时 MySQL、独立端口和真实 JVM，结束时清理。首次运行浏览器测试时，在 `web` 下执行 `npx playwright install chromium`。依赖合同、迁移、故障与发布结果见 [验收记录](docs/release-readiness.md)。部署配置、恢复及审计操作见 [运维手册](docs/operations.md)。最初的研发实施方案保存在 [启动包](super-harness_codex_研发启动包/docs/IMPLEMENTATION_PLAN.md)。
+`smoke.mjs` 在目标服务创建测试 Agent、修订和会话，并提交两轮运行。`acceptance.mjs` 使用已构建的 jar、自有临时 MySQL、独立端口和真实 JVM，结束时清理。首次运行浏览器测试时，在 `web` 下执行 `npx playwright install chromium`。依赖合同、迁移、故障与发布结果见 [验收记录](docs/release-readiness.md)。部署配置、恢复及审计操作见 [运维手册](docs/operations.md)。项目维护入口见 [AGENTS.md](AGENTS.md)。最初的方案可查阅[历史实施计划](https://github.com/JasonYZzz/super-harness/blob/b771adf78d50286f247935cd3cf59d24374a5e64/super-harness_codex_研发启动包/docs/IMPLEMENTATION_PLAN.md)。
 
 Web UI 的上游组件、流式协议与复用实现见 [官方前端组件对照评审](docs/upstream/WEB-UI.md)。
 

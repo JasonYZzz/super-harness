@@ -7,7 +7,12 @@ import java.util.function.Consumer;
  * A turn writes only to its unique session slot. Publication of that slot is fenced by the engine.
  */
 public interface AgentRuntime {
-    record PinnedSkill(UUID id, String name, String version, String content) {}
+    record PinnedSkill(UUID id, String name, String version, String content,
+            String description, java.util.Map<String, String> resources) {
+        public PinnedSkill {
+            resources = java.util.Map.copyOf(resources);
+        }
+    }
 
     record Turn(
             UUID conversation,

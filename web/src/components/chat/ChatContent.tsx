@@ -1,26 +1,17 @@
-import {
-	type ExternalExecutionResultEvent,
-	ReplyFinishedReason,
-} from '@agentscope-ai/agentscope/event';
+import { ReplyFinishedReason } from '@agentscope-ai/agentscope/event';
 import {
 	type ContentBlock,
 	type Msg,
 	type TextBlock,
-	type ToolCallBlock,
 } from '@agentscope-ai/agentscope/message';
 import { GitBranch, TriangleAlert } from 'lucide-react';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import type { GitStatus } from '@/api';
-import type { ChatQueueItem } from '@/api/chat';
-import { ASMessageBubble, SteeringMessageBubble } from '@/components/chat/ASMessageBubble.tsx';
+import { ASMessageBubble } from '@/components/chat/ASMessageBubble.tsx';
 import { ClientToolsMenu } from '@/components/chat/ClientToolsMenu';
-import { ConfirmCard } from '@/components/chat/ConfirmCard.tsx';
-import { ExternalExecutionCard } from '@/components/chat/ExternalExecutionCard.tsx';
 import { FlipCard } from '@/components/chat/FlipCard.tsx';
-import { ManualClientToolCard } from '@/components/chat/ManualClientToolCard';
-import { QueuedMessages } from '@/components/chat/QueuedMessages.tsx';
-import { TextInput } from '@/components/chat/TextInput.tsx';
+import { TextInput, type ReplyPhase } from '@/components/chat/TextInput';
 import { DiffStats } from '@/components/chat/tool-renderers/_shared';
 import { WorkingDirectoryDialog } from '@/components/dialog/WorkingDirectoryDialog';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert.tsx';
@@ -35,15 +26,9 @@ import {
 	MessageScrollerViewport,
 } from '@/components/ui/message-scroller.tsx';
 import { Spinner } from '@/components/ui/spinner';
-import type { ReplyPhase } from '@/hooks/useMessages';
 import { useTranslation } from '@/i18n/useI18n';
 import type { RealtimeASRConfig } from '@/lib/browserRealtimeASRTransport';
 import type { RealtimeConnectionState } from '@/lib/browserWebRTCTransport';
-import {
-	getClientExternalToolRegistration,
-	type ClientExternalToolResult,
-} from '@/lib/client-external-tools';
-import { getPendingHitlCalls } from '@/lib/pendingToolCalls';
 import { cn } from '@/lib/utils';
 
 /** How long a load may run before it is worth showing a spinner. */
@@ -81,39 +66,13 @@ interface ChatContentProps {
 	 * *previous* session's messages until the fetch effect clears them.
 	 */
 	loading?: boolean;
-	/**
-	 * Reply lifecycle phase from ``useMessages`` — forwarded to
-	 * ``TextInput`` to select the primary action for the current draft.
-	 */
 	phase: ReplyPhase;
-	/** Number of locally submitted user turns waiting to start. */
-	queuedCount: number;
-	queuedItems: ChatQueueItem[];
-	queueReorderDisabled: boolean;
-	activeReplyId: string | null;
 	disabled: boolean;
 	onSend: (content: ContentBlock[]) => Promise<void> | void;
-	onUserConfirm: (
-		toolCall: ToolCallBlock,
-		confirm: boolean,
-		replyId: string,
-		rules?: ToolCallBlock['suggested_rules'],
-	) => Promise<void>;
-	onClientExternalToolResult: (
-		toolCall: ToolCallBlock,
-		result: ClientExternalToolResult,
-		replyId: string,
-	) => Promise<void>;
-	onExternalExecutionResult: (event: ExternalExecutionResultEvent) => Promise<void>;
 	autoComplete?: (input: string) => string | null;
 	className?: string;
 	/** Called when the user clicks the stop button. */
 	onInterrupt?: () => void;
-	onUpdateQueued: (itemId: string, text: string) => Promise<void>;
-	onDeleteQueued: (itemId: string) => Promise<void>;
-	onSteerQueued: (itemId: string, replyId: string) => Promise<void>;
-	onMoveQueued: (itemId: string, direction: -1 | 1) => Promise<void>;
-	onReorderQueued: (itemIds: string[]) => Promise<void>;
 	voiceState?: RealtimeConnectionState;
 	onVoiceToggle?: () => void;
 	voiceDisabled?: boolean;
@@ -159,23 +118,11 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 	msgs,
 	loading = false,
 	phase,
-	queuedCount,
-	queuedItems,
-	queueReorderDisabled,
-	activeReplyId,
 	disabled,
 	onSend,
-	onUserConfirm,
-	onClientExternalToolResult,
-	onExternalExecutionResult,
 	autoComplete,
 	className,
 	onInterrupt,
-	onUpdateQueued,
-	onDeleteQueued,
-	onSteerQueued,
-	onMoveQueued,
-	onReorderQueued,
 	voiceState,
 	onVoiceToggle,
 	voiceDisabled,
@@ -196,30 +143,10 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 	onRefreshGit,
 }) => {
 	const { t, i18n } = useTranslation();
-	const { deferredItems, steeringMessages } = useMemo(() => {
-		const deferred: ChatQueueItem[] = [];
-		const steering: Pick<Msg, 'id' | 'content' | 'created_at'>[] = [];
-		for (const item of queuedItems) {
-			if (item.state !== 'steering') {
-				deferred.push(item);
-				continue;
-			}
-			const messages = Array.isArray(item.input) ? item.input : [item.input];
-			for (const message of messages) {
-				steering.push({
-					id: `${item.id}:${message.id}`,
-					content: message.content,
-					created_at: message.created_at,
-				});
-			}
-		}
-		return { deferredItems: deferred, steeringMessages: steering };
-	}, [queuedItems]);
-
 	// Only a session that finished loading with nothing in it is empty.
 	// Treating "no messages yet" as empty would flash the greeting over
 	// every session that does have history.
-	const isEmpty = !loading && msgs.length === 0 && steeringMessages.length === 0;
+	const isEmpty = !loading && msgs.length === 0;
 
 	// A spinner that appears and vanishes inside a couple of frames reads
 	// as a flicker, not as feedback — so hold it back until the load has
@@ -234,38 +161,6 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 		const timer = setTimeout(() => setShowSpinner(true), SPINNER_DELAY_MS);
 		return () => clearTimeout(timer);
 	}, [loading]);
-
-	const pendingHitlCalls = useMemo(() => getPendingHitlCalls(msgs), [msgs]);
-	const toConfirmedToolCalls = pendingHitlCalls.filter((call) => call.kind === 'confirmation');
-	const externalToolCalls = pendingHitlCalls.filter((call) => call.kind === 'external_execution');
-
-	const pendingExternalTool = externalToolCalls[0];
-	const pendingExternalToolRegistration = pendingExternalTool
-		? getClientExternalToolRegistration(pendingExternalTool.toolCall.name)
-		: undefined;
-	const PendingExternalToolComponent = pendingExternalToolRegistration?.PendingComponent;
-	const isManualClientTool =
-		pendingExternalTool?.toolCall.name.startsWith('client__') === true &&
-		!PendingExternalToolComponent;
-	const acceptsInput =
-		Boolean(pendingExternalToolRegistration?.composerResult) &&
-		(!pendingExternalToolRegistration?.canCompose ||
-			Boolean(
-				pendingExternalTool &&
-					pendingExternalToolRegistration.canCompose(pendingExternalTool.toolCall),
-			));
-
-	const handleSend = async (content: ContentBlock[]) => {
-		const pending = pendingExternalTool;
-		if (!pending || !acceptsInput) {
-			await onSend(content);
-			return;
-		}
-
-		const result = pendingExternalToolRegistration?.composerResult?.(content, pending.toolCall);
-		if (result === null || result === undefined) return;
-		await onClientExternalToolResult(pending.toolCall, result, pending.replyId);
-	};
 
 	// On an empty session the prompt and the input centre together, so every box
 	// down to the message list shrinks to its content instead of filling.
@@ -314,23 +209,10 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 											)}
 											<ASMessageBubble
 												message={message}
-												onUserConfirm={onUserConfirm}
-											/>
+													/>
 										</MessageScrollerItem>
 									);
 								})}
-								{steeringMessages.map((message) => (
-									<MessageScrollerItem
-										key={message.id}
-										messageId={`steering:${message.id}`}
-									>
-										<SteeringMessageBubble
-											blocks={message.content}
-											createdAt={message.created_at}
-											status="steering"
-										/>
-									</MessageScrollerItem>
-								))}
 								{msgs.length > 0 &&
 									msgs[msgs.length - 1].finished_reason ===
 										ReplyFinishedReason.EXCEED_MAX_ITERS &&
@@ -383,78 +265,9 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 
 			{loading ? null : (
 				<div className="relative min-w-full max-w-full w-full">
-					<FlipCard
-						visible={
-							toConfirmedToolCalls.length > 0 ||
-							externalToolCalls.length > 0 ||
-							footerSlot !== null
-						}
-						className="absolute bottom-full left-0 right-0 mb-2 z-50"
-					>
-						{toConfirmedToolCalls.length > 0 ? (
-							<ConfirmCard
-								key={`${toConfirmedToolCalls[0].replyId}:${toConfirmedToolCalls[0].toolCall.id}`}
-								toolCall={toConfirmedToolCalls[0].toolCall}
-								onUserConfirm={(confirm, rules) =>
-									onUserConfirm(
-										toConfirmedToolCalls[0].toolCall,
-										confirm,
-										toConfirmedToolCalls[0].replyId,
-										rules,
-									)
-								}
-							/>
-						) : pendingExternalTool ? (
-							PendingExternalToolComponent ? (
-								<PendingExternalToolComponent
-									key={`${pendingExternalTool.replyId}:${pendingExternalTool.toolCall.id}`}
-									toolCall={pendingExternalTool.toolCall}
-									onSubmit={(result) =>
-										onClientExternalToolResult(
-											pendingExternalTool.toolCall,
-											result,
-											pendingExternalTool.replyId,
-										)
-									}
-									onCancel={onInterrupt}
-									cancelling={phase === 'interrupting'}
-								/>
-							) : isManualClientTool ? (
-								<ManualClientToolCard
-									key={`${pendingExternalTool.replyId}:${pendingExternalTool.toolCall.id}`}
-									toolCall={pendingExternalTool.toolCall}
-									onSubmit={(result) =>
-										onClientExternalToolResult(
-											pendingExternalTool.toolCall,
-											result,
-											pendingExternalTool.replyId,
-										)
-									}
-									onCancel={onInterrupt}
-									cancelling={phase === 'interrupting'}
-								/>
-							) : (
-								<ExternalExecutionCard
-									key={`${pendingExternalTool.replyId}:${pendingExternalTool.toolCall.id}`}
-									replyId={pendingExternalTool.replyId}
-									toolCall={pendingExternalTool.toolCall}
-									onResult={onExternalExecutionResult}
-								/>
-							)
-						) : (
-							footerSlot
-						)}
+					<FlipCard visible={Boolean(footerSlot)} className="absolute bottom-full left-0 right-0 mb-2 z-50">
+						{footerSlot}
 					</FlipCard>
-					<QueuedMessages
-						items={deferredItems}
-						reorderDisabled={queueReorderDisabled}
-						activeReplyId={activeReplyId}
-						onUpdate={onUpdateQueued}
-						onDelete={onDeleteQueued}
-						onSteer={onSteerQueued}
-						onMove={onMoveQueued}
-						onReorder={onReorderQueued}
-					/>
 					{/* Concentric radii: the pill stays rounded-[28px] on all four
 				    corners and floats on this surface, whose own radius is
 				    28 + the 4px padding. Matching them is what keeps the two
@@ -463,14 +276,12 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 					<TextInput
 						key={JSON.stringify([agentId, sessionId])}
 						className="min-w-full max-w-full w-full rounded-[32px] bg-muted p-1"
-						onSend={handleSend}
+						onSend={onSend}
 						disabled={disabled}
 						autoComplete={autoComplete}
-						allowedInputTypes={acceptsInput ? [] : allowedInputTypes}
+						allowedInputTypes={allowedInputTypes}
 						fileProcessor={fileProcessor}
 						phase={phase}
-						acceptsInput={acceptsInput}
-						queuedCount={queuedCount}
 						onInterrupt={onInterrupt}
 						voiceState={voiceState}
 						onVoiceToggle={onVoiceToggle}

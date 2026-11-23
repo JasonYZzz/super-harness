@@ -38,7 +38,6 @@ import {
 } from '@/components/ui/attachment.tsx';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
-import type { ReplyPhase } from '@/hooks/useMessages';
 import { useRealtimeAudioRecorder } from '@/hooks/useRealtimeAudioRecorder';
 import { useTranslation } from '@/i18n/useI18n.ts';
 import type { RealtimeASRConfig } from '@/lib/browserRealtimeASRTransport';
@@ -56,6 +55,8 @@ interface ProcessedFile {
 	/** The resulting ContentBlock after processing (available when status === 'done') */
 	block: ContentBlock | null;
 }
+
+export type ReplyPhase = 'idle' | 'streaming' | 'interrupting';
 
 interface TextInputProps {
 	onSend: (blocks: ContentBlock[]) => Promise<void> | void;
@@ -86,10 +87,6 @@ interface TextInputProps {
 	fileProcessor: (file: File) => Promise<ContentBlock | null>;
 	/** A running reply can be stopped when the draft is empty. */
 	phase?: ReplyPhase;
-	/** Allow sending while a reply is parked awaiting structured input. */
-	acceptsInput?: boolean;
-	/** Number of accepted user turns that have not started a reply yet. */
-	queuedCount?: number;
 	onInterrupt?: () => void;
 	/** Current browser realtime voice connection state. */
 	voiceState?: RealtimeConnectionState;
@@ -150,7 +147,6 @@ const TEXTAREA_PADDING_X_PX = 12;
  * @param root0.autoComplete - Function to provide autocomplete suggestions.
  * @param root0.disabled - Whether the input is disabled.
  * @param root0.className - Additional CSS classes for styling.
- * @param root0.queuedCount - Accepted turns waiting to start.
  * @param root0.onInterrupt - Stops the currently active reply.
  * @returns A TextInput component.
  */
@@ -165,8 +161,6 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 			allowedInputTypes,
 			fileProcessor,
 			phase = 'idle',
-			acceptsInput = false,
-			queuedCount = 0,
 			onInterrupt,
 			voiceState = 'idle',
 			onVoiceToggle,
@@ -381,8 +375,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 				disabled ||
 				hasProcessing ||
 				submitting ||
-				speechInputBusy ||
-				(acceptsInput && files.length > 0)
+				speechInputBusy
 			)
 				return;
 
@@ -467,15 +460,13 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 			if (hasContent || hasProcessing || submitting) {
 				return {
 					icon: submitting ? Loader2 : ArrowUp,
-					tooltip:
-						replyActive && !acceptsInput ? t('textInput.queue') : t('textInput.send'),
+					tooltip: t('textInput.send'),
 					disabled:
 						disabled ||
 						!hasContent ||
 						hasProcessing ||
 						submitting ||
-						speechInputBusy ||
-						(acceptsInput && files.length > 0),
+						speechInputBusy,
 					variant: 'default',
 					onClick: handleSend,
 				};
@@ -788,15 +779,6 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 						</div>
 					</div>
 				</div>
-				{queuedCount > 0 && (
-					<div
-						className="px-3 text-xs text-muted-foreground"
-						role="status"
-						aria-live="polite"
-					>
-						{t('textInput.queued', { count: queuedCount })}
-					</div>
-				)}
 			</div>
 		);
 	},

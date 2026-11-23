@@ -22,27 +22,11 @@ import java.util.UUID;
 @RequestMapping("/api/v1/runs/{id}")
 class RunStream {
     private final Runs runs;
-    private final RunLifecycle lifecycle;
     private final ObjectMapper mapper;
 
-    RunStream(Runs runs, RunLifecycle lifecycle, ObjectMapper mapper) {
+    RunStream(Runs runs, ObjectMapper mapper) {
         this.runs = runs;
-        this.lifecycle = lifecycle;
         this.mapper = mapper;
-    }
-
-    @PostMapping("/cancel")
-    Object cancel(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
-        var p = Identity.principal(jwt);
-        lifecycle.cancel(p, id);
-        return runs.status(p, id);
-    }
-
-    @PostMapping("/resume")
-    Object resume(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
-        var p = Identity.principal(jwt);
-        lifecycle.resume(p, id);
-        return runs.status(p, id);
     }
 
     @io.swagger.v3.oas.annotations.Operation(
