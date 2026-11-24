@@ -14,6 +14,14 @@ public interface AgentRuntime {
         }
     }
 
+    record Recall(java.util.List<String> recent, UUID summaryId, String summary) {
+        public static final Recall EMPTY = new Recall(java.util.List.of(), null, "");
+
+        public Recall {
+            recent = java.util.List.copyOf(recent);
+        }
+    }
+
     record Turn(
             UUID conversation,
             UUID slot,
@@ -25,9 +33,37 @@ public interface AgentRuntime {
             McpProfile mcp,
             String permissionMode,
             java.util.List<PinnedSkill> skills,
-            boolean memoryEnabled) {
+            boolean memoryEnabled,
+            Recall recall, UUID libraryId) {
         public Turn {
             skills = java.util.List.copyOf(skills);
+        }
+
+        public Turn(
+                UUID conversation,
+                UUID slot,
+                UUID previousSlot,
+                String prompt,
+                String model,
+                String input,
+                boolean sandbox,
+                McpProfile mcp,
+                String permissionMode,
+                java.util.List<PinnedSkill> skills,
+                boolean memoryEnabled) {
+            this(
+                    conversation,
+                    slot,
+                    previousSlot,
+                    prompt,
+                    model,
+                    input,
+                    sandbox,
+                    mcp,
+                    permissionMode,
+                    skills,
+                    memoryEnabled,
+                    Recall.EMPTY, null);
         }
 
         public Turn(
@@ -51,7 +87,8 @@ public interface AgentRuntime {
                     mcp,
                     permissionMode,
                     java.util.List.of(),
-                    false);
+                    false,
+                    Recall.EMPTY, null);
         }
 
         public Turn(

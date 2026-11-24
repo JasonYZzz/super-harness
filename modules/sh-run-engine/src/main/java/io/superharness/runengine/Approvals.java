@@ -14,11 +14,13 @@ import java.util.*;
  */
 @Service
 public class Approvals {
+    private final Knowledge knowledge;
     private final Sql sql;
     private final Catalog catalog;
     private final EventJournal events;
 
-    public Approvals(Sql sql, Catalog catalog, EventJournal events) {
+    public Approvals(Knowledge knowledge, Sql sql, Catalog catalog, EventJournal events) {
+        this.knowledge = knowledge;
         this.sql = sql;
         this.catalog = catalog;
         this.events = events;
@@ -136,6 +138,7 @@ public class Approvals {
                                 args.path("sha256").asText()))))
             throw new IllegalStateException("Approval payload mismatch");
         if (approve) {
+            knowledge.publishMemory(r);
             // Tool identity and artifact receipt share an ID: replay is a no-op inside this
             // transaction.
             sql.update(
@@ -166,8 +169,8 @@ public class Approvals {
                 tool);
         sql.update(
                 "UPDATE agent_runs SET"
-                        + " status=?,error_code=?,finished_at=UTC_TIMESTAMP(6),fence=fence+1 WHERE"
-                        + " tenant_id=? AND id=?",
+                    + " pending_memory=NULL,status=?,error_code=?,finished_at=UTC_TIMESTAMP(6),fence=fence+1"
+                    + " WHERE tenant_id=? AND id=?",
                 approve ? "SUCCEEDED" : "FAILED",
                 approve ? null : "APPROVAL_REJECTED",
                 p.tenant(),

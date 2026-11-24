@@ -460,7 +460,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 			if (hasContent || hasProcessing || submitting) {
 				return {
 					icon: submitting ? Loader2 : ArrowUp,
-					tooltip: t('textInput.send'),
+					tooltip: replyActive ? t('harness.queued') : t('textInput.send'),
 					disabled:
 						disabled ||
 						!hasContent ||

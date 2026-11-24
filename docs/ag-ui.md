@@ -7,13 +7,15 @@
 | 用途 | 发送内容 | 成功响应 |
 |---|---|---|
 | 发送或重试用户消息 | `threadId`、协议 `runId`、末条为用户文本的 `messages` | 文本增量、计划、工具活动，直至首次中断或任务终态。相同命令用原 ID 重放。 |
+| 排队 | 一条用户消息与 `{"harness.enqueue":true}` | 返回 `result.taskId`，按原协议 runId 重试同一条消息可取回相同回执。 |
+| 撤回排队消息 | 空消息与 `{"harness.withdraw":"<平台任务 UUID>"}` | 尚未领取时取消；已经领取返回 409。 |
 | 回复发布审批 | 新的协议 `runId` 与单项 `resume` | 决定关联原 `interruptId` 和 `toolCallId`。批准产生发布回执，拒绝或放弃以 `RUN_ERROR` 结束。 |
 | 打开会话、刷新或检查变化 | 空消息与 `forwardedProps: {"harness.snapshot": {}}` | `MESSAGES_SNAPSHOT` 和 `STATE_SNAPSHOT` 提供消息与计划。`RUN_FINISHED.result` 提供 cursor、turns、tools、archived、revisionId 和 capabilities。待决审批在 `outcome.interrupts`。 |
 | 跟随已存在的平台任务 | 空消息与 `forwardedProps: {"harness.observe": "<平台任务 UUID>"}` | 服务端校验会话与任务归属，从任务起点重放并追随新事件，至首次中断或终态。 |
 | 停止平台任务 | 空消息与 `forwardedProps: {"harness.cancel":"<平台任务 UUID>"}` | 所有者收到 `result.taskId` 确认。正在执行的任务由 Worker 接受取消信号，最终状态从账本获取。 |
 | 恢复故障尝试 | 空消息与 `forwardedProps: {"harness.recover":{"taskId":"<平台任务 UUID>","attempt":1}}` | 传入快照中的失败尝试编号。服务端核验归属、可恢复状态和期限；同一次恢复重试复用确认，后续尝试独立。 |
 
-`harness.snapshot` 和 `harness.observe` 是 Harness 在标准 `forwardedProps` 中定义的只读扩展。另外两个扩展用于任务控制。每次只传一个扩展，且与发送消息或审批答复互斥。快照支持传入 `{"harness.snapshot":{"since":"<cursor>"}}`。视图未变化时返回标准的开始、结束事件，结束事件含 `result: {"unchanged":true}`，客户端保留已有视图。[服务端分发](../apps/sh-api/src/main/java/io/superharness/api/AguiApi.java) · [会话快照](../apps/sh-api/src/main/java/io/superharness/api/AguiThreads.java)
+`harness.snapshot` 和 `harness.observe` 是 Harness 在标准 `forwardedProps` 中定义的只读扩展。每次只传一个扩展。排队扩展携带一条用户消息；其余扩展使用空消息。审批答复单独提交。快照支持传入 `{"harness.snapshot":{"since":"<cursor>"}}`。视图未变化时返回标准的开始、结束事件，结束事件含 `result: {"unchanged":true}`，客户端保留已有视图。[服务端分发](../apps/sh-api/src/main/java/io/superharness/api/AguiApi.java) · [会话快照](../apps/sh-api/src/main/java/io/superharness/api/AguiThreads.java)
 
 ## 重连与审批
 
@@ -41,3 +43,5 @@
 | `POST /api/v1/ag-ui/threads/{thread}/runs/{run}/connect` | 发送 `harness.observe`，值为平台任务 UUID。 |
 | `POST /api/v1/approvals/{id}/decision` | 用审批记录返回的 threadId、interruptId（记录中的 id）和 argsHash 发起标准 resume。 |
 | `POST /api/v1/runs/{id}/cancel`、`POST /api/v1/runs/{id}/resume` | 在 AG-UI 请求中发送 `harness.cancel` 或带尝试编号的 `harness.recover`。 |
+
+运行期间，聊天输入框可通过 `harness.enqueue: true` 携带一条用户消息，使用普通消息相同的 `runId` 幂等入队。服务端返回含 `taskId` 的回执。原流继续推送当前轮，后续快照按运行顺序重建排队消息。用 `harness.withdraw` 和任务 ID 可撤回尚在排队的消息，已经开始的任务返回 409。等待审批时继续沿用原审批流程。

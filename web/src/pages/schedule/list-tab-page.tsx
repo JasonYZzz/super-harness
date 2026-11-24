@@ -35,7 +35,7 @@ function scheduleHasOccurrencesInRange(
 		currentDate.setMilliseconds(0);
 
 		const interval = CronExpressionParser.parse(data.cron_expression, {
-			currentDate,
+			currentDate, tz: data.timezone,
 			endDate: new Date(end),
 		});
 

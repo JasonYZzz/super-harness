@@ -10,10 +10,12 @@ import java.util.*;
 
 @Service
 public class Scheduler {
+    private final Knowledge knowledge;
     private final Sql sql;
     private final EventJournal journal;
 
-    public Scheduler(Sql sql, EventJournal journal) {
+    public Scheduler(Knowledge knowledge, Sql sql, EventJournal journal) {
+        this.knowledge = knowledge;
         this.sql = sql;
         this.journal = journal;
     }
@@ -28,7 +30,7 @@ public class Scheduler {
             String owner, String profile, int version, boolean supportsSandbox) {
         var candidate =
                 sql.first(
-                        """
+"""
 SELECT r.id,r.tenant_id,r.conversation_id,r.attempt,r.fence,r.traceparent,r.input_json,r.requested_by,
   a.prompt,COALESCE(r.input_json->>'$.modelOverride.model',a.model) AS model,a.config,c.state_slot
 FROM agent_runs r JOIN agent_revisions a ON a.tenant_id=r.tenant_id AND a.id=r.agent_revision_id
@@ -59,10 +61,10 @@ ORDER BY r.accepted_at,r.id LIMIT 1 FOR UPDATE OF r SKIP LOCKED
                 id);
         int admitted =
                 sql.update(
-                        """
+"""
 UPDATE agent_runs r JOIN conversation_gates g ON g.tenant_id=r.tenant_id
   AND g.conversation_id=r.conversation_id AND g.run_id=r.id
-SET r.status='CLAIMED',r.lease_owner=?,r.attempt=r.attempt+1,r.fence=r.fence+1,
+SET r.pending_memory=NULL,r.status='CLAIMED',r.lease_owner=?,r.attempt=r.attempt+1,r.fence=r.fence+1,
   r.slot_id=?,r.lease_deadline=UTC_TIMESTAMP(6)+INTERVAL 60 SECOND,
   r.started_at=COALESCE(r.started_at,UTC_TIMESTAMP(6))
 WHERE r.tenant_id=? AND r.id=? AND r.status='QUEUED'
@@ -90,14 +92,23 @@ WHERE r.tenant_id=? AND r.id=? AND r.status='QUEUED'
                             resources));
         }
         String input = sql.parse(r.get("input_json")).path("text").asText();
+        var recall = AgentRuntime.Recall.EMPTY;
         if (config.path("useMemory").asBoolean()) {
-            var notes =
-                    sql.rows(
-                            "SELECT content FROM memory_entries WHERE tenant_id=? AND owner_id=?"
-                                    + " ORDER BY created_at DESC,id LIMIT 4",
-                            tenant,
-                            r.get("requested_by"));
-            if (!notes.isEmpty()) input = "用户保存的参考资料：" + sql.json(notes) + "\n当前请求：" + input;
+            var summary =
+                    sql.first(
+                                    """
+                                    SELECT id,content FROM memory_entries WHERE tenant_id=? AND owner_id=?
+                                        AND summary_conversation=? AND expires_at>UTC_TIMESTAMP(6)
+                                    """,
+                                    tenant,
+                                    r.get("requested_by"),
+                                    conv)
+                            .orElse(Map.of());
+            recall =
+                    new AgentRuntime.Recall(
+                            knowledge.recall(tenant, r.get("requested_by").toString(), conv, "", 4),
+                            Sql.uuid(summary.get("id")),
+                            (String) summary.getOrDefault("content", ""));
         }
         var mcp =
                 config.has("mcp")
@@ -131,6 +142,8 @@ WHERE r.tenant_id=? AND r.id=? AND r.status='QUEUED'
                                         .path("permissionMode")
                                         .asText("default"),
                                 skills,
-                                config.path("useMemory").asBoolean())));
+                                config.path("useMemory").asBoolean(),
+                                recall,
+                                sql.parse(r.get("input_json")).hasNonNull("libraryId") ? UUID.fromString(sql.parse(r.get("input_json")).path("libraryId").asText()) : null)));
     }
 }

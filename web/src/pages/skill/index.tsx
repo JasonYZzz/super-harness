@@ -6,6 +6,7 @@ import type { HubInfo, SkillCard, SkillView } from '@/api';
 import { hubApi, skillApi } from '@/api';
 import { ApiError } from '@/api/client';
 import { ResourceDetailDrawer } from '@/components/drawer/ResourceDetailDrawer.tsx';
+import { SkillUpload } from '@/components/form/SkillUpload';
 import { LoadMore } from '@/components/hub/LoadMore.tsx';
 import { ResourcePanel } from '@/components/hub/ResourcePanel.tsx';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx';
@@ -346,6 +347,7 @@ function MinePanel({ skills, loading, onRemove }: MinePanelProps) {
 					: undefined
 			}
 		>
+			{onRemove && <SkillUpload />}
 			{loading ? (
 				<div className="flex justify-center py-10">
 					<Spinner />

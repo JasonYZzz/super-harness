@@ -149,16 +149,16 @@ const ChatPageInner = () => {
 	// from another page, or from a new tab — reopens it instead of
 	// making them pick the same pair again.
 	useEffect(() => {
-		if (!urlAgentId || !urlSessionId) return;
+		if (!selectedAgent || !currentView || !urlAgentId || !urlSessionId) return;
 		localStorage.setItem(LAST_AGENT_KEY, urlAgentId);
 		localStorage.setItem(LAST_SESSION_KEY, urlSessionId);
-	}, [urlAgentId, urlSessionId]);
+	}, [selectedAgent, currentView, urlAgentId, urlSessionId]);
 
 	// Redirect: URL is missing an agent → reopen the last one viewed,
 	// falling back to the first, and rewrite the URL in-place (replace
 	// so we don't pollute history).
 	useEffect(() => {
-		if (urlAgentId || agents.length === 0) return;
+		if (!agents.length || agents.some(agent => agent.id === urlAgentId)) return;
 		const remembered = localStorage.getItem(LAST_AGENT_KEY);
 		const agent = agents.find((a) => a.id === remembered) ?? agents[0];
 		navigate(`/chat/${agent.id}`, { replace: true });
@@ -168,7 +168,7 @@ const ChatPageInner = () => {
 	// longer exists for this agent → reopen the last session viewed
 	// under *this* agent, falling back to the first available one.
 	useEffect(() => {
-		if (!urlAgentId || sessions.length === 0) return;
+		if (!selectedAgent || sessions.length === 0) return;
 		const matches = urlSessionId && sessions.some((v) => v.session.id === urlSessionId);
 		if (matches) return;
 		const remembered =
@@ -177,7 +177,7 @@ const ChatPageInner = () => {
 				: null;
 		const view = sessions.find((v) => v.session.id === remembered) ?? sessions[0];
 		navigate(`/chat/${urlAgentId}/${view.session.id}`, { replace: true });
-	}, [urlAgentId, urlSessionId, sessions, navigate]);
+	}, [urlAgentId, urlSessionId, selectedAgent, sessions, navigate]);
 
 	/**
 	 * Create a new session under the currently selected agent and
@@ -246,7 +246,7 @@ const ChatPageInner = () => {
 					<SidebarGroup className="px-2 py-0">
 						<SidebarGroupLabel className="justify-between">
 							{t('common.agent')}
-							<AgentDialog onCreated={refetchAgents}>
+							<AgentDialog onCreated={id => navigate('/chat/' + id)}>
 								<Button
 									variant="ghost"
 									size="icon-xs"

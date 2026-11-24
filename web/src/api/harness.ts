@@ -7,7 +7,7 @@ export async function http(path: string, init: RequestInit = {}) {
 	const headers = new Headers(init.headers);
 	if (!headers.has('Authorization'))
 		headers.set('Authorization', 'Bearer ' + (sessionStorage.getItem('harness.access') ?? ''));
-	if (init.body) headers.set('Content-Type', 'application/json');
+	if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json');
 	const res = await fetch('/api/v1' + path, { ...init, headers });
 	if (res.status === 401 && signedIn() && !new Headers(init.headers).has('Authorization')) {
 		sessionStorage.removeItem('harness.access');
@@ -28,7 +28,7 @@ export async function api<T>(
 	const r = await http(path, {
 		method,
 		headers,
-		body: body === undefined ? undefined : JSON.stringify(body),
+		body: body instanceof FormData ? body : JSON.stringify(body),
 	});
 	const s = await r.text();
 	return (s ? JSON.parse(s) : undefined) as T;
@@ -49,6 +49,7 @@ export interface AgentInput {
 	use_memory?: boolean;
 	skills?: string[];
 	sandbox?: boolean;
+	mcp_profile?: string;
 }
 export async function saveAgent(body: AgentInput, id?: string) {
 	const latest = id ? (await revisions(id))[0] : undefined;
@@ -58,7 +59,7 @@ export async function saveAgent(body: AgentInput, id?: string) {
 		revision: {
 			skills: body.skills ?? config?.skills?.map((s: { id: string }) => s.id),
 			useMemory: body.use_memory ?? config?.useMemory ?? false,
-			mcpProfile: config?.mcp?.id,
+			mcpProfile: (body.mcp_profile ?? config?.mcp?.id) || undefined,
 			model: body.model ?? latest?.model,
 			prompt: body.system_prompt?.trim() || 'You are a helpful assistant.',
 			outputMode: body.publish_artifact ? 'APPROVED_ARTIFACT' : 'CHAT',
@@ -91,7 +92,8 @@ export async function agents() {
 				id: a.id,
 				name: a.name,
 				system_prompt: a.prompt ?? '',
-					model: a.model ?? undefined,
+				model: a.model ?? undefined,
+				mcp_profile: config?.mcp?.id ?? '',
 				sandbox: config?.sandbox ?? false,
 				skills: config?.skills?.map((skill: { id: string }) => skill.id) ?? [],
 				use_memory: config?.useMemory ?? false,
@@ -113,6 +115,9 @@ export async function sessions(agentId: string) {
 			model: string;
 			status: string | null;
 			permissionMode: PermissionMode;
+			scheduleId: string | null;
+			channelSource: string | null;
+			channelThread: string | null;
 			publishApproval: number | boolean;
 		}[]
 	>('/conversations?agentId=' + encodeURIComponent(agentId));
@@ -124,7 +129,8 @@ export async function sessions(agentId: string) {
 				updated_at: r.createdAt,
 				user_id: r.ownerId,
 				agent_id: agentId,
-				origin: { type: 'user' },
+				origin: r.scheduleId ? { type: 'schedule', schedule_id: r.scheduleId }
+					: r.channelSource ? {type: 'channel', channel_id: r.channelSource, chat_id: r.channelThread ?? '', chat_name: r.channelSource } : { type: 'user' },
 				team_id: null,
 				config: {
 					name: r.name ?? format(new Date(r.createdAt), 'yyyy-MM-dd HH:mm:ss'),

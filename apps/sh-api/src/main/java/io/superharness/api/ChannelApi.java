@@ -44,7 +44,8 @@ class ChannelApi {
                 SELECT t.source,t.thread_key AS threadId,BIN_TO_UUID(t.agent_id) AS agentId,
                        BIN_TO_UUID(t.conversation_id) AS conversationId
                 FROM channel_threads t JOIN conversations c ON c.id=t.conversation_id
-                WHERE t.tenant_id=? AND t.owner_id=? AND c.archived=FALSE ORDER BY c.created_at DESC
+                JOIN agent_definitions a ON a.tenant_id=c.tenant_id AND a.id=c.agent_id
+                WHERE t.tenant_id=? AND t.owner_id=? AND c.archived=FALSE AND a.archived=FALSE ORDER BY c.created_at DESC
                 """,
                 p.tenant(),
                 p.user());

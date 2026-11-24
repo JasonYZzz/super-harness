@@ -108,8 +108,12 @@ class HelloHarnessTest {
         }
     }
 
-    @Test
-    void compactsHistoryInTheNextPublishedSlot() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(
+            strings = {"normal", "overflow", "partial", "repeated"})
+    void compactsHistoryWithoutExtractingFactsOrArchiving(String scenario) throws Exception {
+        boolean overflow = !scenario.equals("normal");
+        var summaries = new java.util.concurrent.atomic.AtomicInteger();
         var ds = new JdbcDataSource();
         ds.setURL("jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
         var store = JdbcDistributedStore.create(ds);
@@ -119,12 +123,14 @@ class HelloHarnessTest {
         var slot = UUID.randomUUID();
         var history =
                 AgentState.builder().userId(conversation.toString()).sessionId(old.toString());
-        for (int i = 0; i < 60; i++) {
+        int pairs = overflow ? 5 : 60;
+        for (int i = 0; i < pairs; i++) {
             history.addMessage(new UserMessage("prior message " + i + " background".repeat(100)));
             history.addMessage(new AssistantMessage("recorded " + i));
         }
         store.agentStateStore()
                 .save(conversation.toString(), old.toString(), "agent_state", history.build());
+        var overflows = new java.util.concurrent.atomic.AtomicInteger();
         String modelName = "compact-" + UUID.randomUUID();
         ModelRegistry.register(
                 modelName,
@@ -135,6 +141,35 @@ class HelloHarnessTest {
 
                     public Flux<ChatResponse> stream(
                             List<Msg> messages, List<ToolSchema> tools, GenerateOptions options) {
+                        if (messages.getFirst()
+                                .getTextContent()
+                                .contains("memory extraction assistant"))
+                            throw new AssertionError("Fact extraction while memory disabled");
+                        if (tools == null) summaries.incrementAndGet();
+                        boolean compacted =
+                                messages.stream()
+                                        .anyMatch(
+                                                m -> "__compaction_summary__".equals(m.getName()));
+                        if (overflow
+                                && tools != null
+                                && (!compacted || scenario.equals("repeated"))) {
+                            overflows.incrementAndGet();
+                            Flux<ChatResponse> failure =
+                                    Flux.error(
+                                            new IllegalArgumentException(
+                                                    "context_length_exceeded"));
+                            if (scenario.equals("partial"))
+                                return Flux.just(
+                                                ChatResponse.builder()
+                                                        .content(
+                                                                List.of(
+                                                                        TextBlock.builder()
+                                                                                .text("partial")
+                                                                                .build()))
+                                                        .build())
+                                        .concatWith(failure);
+                            return failure;
+                        }
                         return Flux.just(
                                 ChatResponse.builder()
                                         .content(
@@ -159,6 +194,11 @@ class HelloHarnessTest {
                     public void tool(String name) {}
                 };
         try (var handle = runtime.prepare(turn, meter)) {
+            if (scenario.equals("partial") || scenario.equals("repeated")) {
+                assertThrows(RuntimeException.class, () -> handle.execute(delta -> {}));
+                assertEquals(scenario.equals("partial") ? 0 : 1, summaries.get());
+                return;
+            }
             handle.execute(delta -> {});
         }
         var compact =
@@ -170,8 +210,105 @@ class HelloHarnessTest {
                                 AgentState.class)
                         .orElseThrow()
                         .getContext();
-        assertTrue(compact.size() < 120);
+        assertTrue(compact.size() < pairs * 2);
+        if (overflow) assertTrue(overflows.get() > 0);
+        try (var connection = ds.getConnection();
+                var stmt = connection.createStatement();
+                var rows =
+                        stmt.executeQuery(
+                                "SELECT COUNT(*) FROM AGENTSCOPE_STORE WHERE ITEM_KEY LIKE"
+                                        + " '%.jsonl' OR ITEM_KEY LIKE '%.md'")) {
+            assertTrue(rows.next());
+            assertEquals(0, rows.getInt(1));
+        }
         assertTrue(compact.stream().anyMatch(m -> "__compaction_summary__".equals(m.getName())));
+    }
+
+    @Test
+    void evictedOutputIsPageableAcrossPublishedRemoteSlots() {
+        var ds = new JdbcDataSource();
+        ds.setURL("jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        var store = JdbcDistributedStore.create(ds);
+        var source = UUID.randomUUID();
+        var spec =
+                new io.agentscope.harness.agent.filesystem.spec.RemoteFilesystemSpec(
+                                store.baseStore())
+                        .addSharedPrefix("large_tool_results/")
+                        .isolationScope(io.agentscope.harness.agent.IsolationScope.SESSION);
+        var fs = spec.toFilesystem(workspace, "assistant", rc -> List.of(rc.getSessionId()));
+        var config =
+                io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig.builder()
+                        .evictionPath("large_tool_results/" + source)
+                        .build();
+        var eviction =
+                new io.agentscope.harness.agent.middleware.ToolResultEvictionMiddleware(fs, config);
+        String body = "start" + "x".repeat(81000) + "end";
+        var tool =
+                Msg.builder()
+                        .role(MsgRole.TOOL)
+                        .content(
+                                new ToolResultBlock(
+                                        "lookup-1",
+                                        "lookup",
+                                        List.of(TextBlock.builder().text(body).build()),
+                                        Map.of(),
+                                        ToolResultState.SUCCESS))
+                        .build();
+        var state = AgentState.builder().addMessage(tool).build();
+        var context =
+                RuntimeContext.builder()
+                        .userId("conversation")
+                        .sessionId(source.toString())
+                        .agentState(state)
+                        .build();
+        var input =
+                new io.agentscope.core.middleware.ReasoningInput(List.of(tool), List.of(), null);
+        try (var harness =
+                HarnessAgent.builder()
+                        .name("assistant")
+                        .model(new LocalModel())
+                        .workspace(workspace)
+                        .build()) {
+            eviction.onReasoning(harness, context, input, updated -> Flux.empty()).then().block();
+        }
+        var result =
+                state.getContext().getFirst().getContentBlocks(ToolResultBlock.class).getFirst();
+        String preview =
+                result.getOutput().stream()
+                        .filter(TextBlock.class::isInstance)
+                        .map(TextBlock.class::cast)
+                        .map(TextBlock::getText)
+                        .collect(java.util.stream.Collectors.joining());
+        var match =
+                java.util.regex.Pattern.compile("`(large_tool_results/[^`]+)`").matcher(preview);
+        assertTrue(match.find(), preview.substring(0, 100));
+        var published = new java.util.concurrent.atomic.AtomicBoolean(false);
+        var reader =
+                new ToolOutputReader(
+                        fs,
+                        new io.superharness.runtimespi.RuntimeMeter() {
+                            public UUID reserve(int input, int output) {
+                                return UUID.randomUUID();
+                            }
+
+                            public void record(UUID id, int input, int output) {}
+
+                            public void tool(String name) {}
+
+                            public boolean publishedSlot(UUID id) {
+                                return published.get() && id.equals(source);
+                            }
+                        });
+        assertTrue(reader.read(context, match.group(1), 0).startsWith(body.substring(0, 4096)));
+        var later =
+                RuntimeContext.builder()
+                        .userId("conversation")
+                        .sessionId(UUID.randomUUID().toString())
+                        .build();
+        assertEquals("Unknown tool output.", reader.read(later, match.group(1), 81000));
+        published.set(true);
+        assertEquals(body.substring(81000), reader.read(later, match.group(1), 81000));
+        assertEquals("Unknown tool output.", reader.read(context, "MEMORY.md", 0));
     }
 
     @Test

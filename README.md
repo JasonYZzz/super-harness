@@ -49,14 +49,16 @@ AGENTSCOPE_MYSQL_DATABASE=super_harness_runtime
 
 ## 能力和入口
 
-[17 项 SDK 与 Harness 能力逐项审计](docs/upstream/SDK-HARNESS.md)包含改动前状态、验证方法和功能边界。聊天权限菜单的 Plan 进入只读规划，模型可写入计划。查看保存的计划后，切换回执行模式并发送下一条消息。Agent 设置可以固定最多四个 Skill 版本、启用记忆；频道页提供 HTTP 消息格式和已绑定会话。
+[17 项 SDK 与 Harness 能力逐项审计](docs/upstream/SDK-HARNESS.md)包含改动前状态、验证方法和功能边界。聊天权限菜单的 Plan 进入只读规划，模型可写入计划。查看保存的计划后，切换回执行模式并发送下一条消息。Agent 设置可以固定最多四个 Skill 版本、启用记忆；频道页提供 HTTP 消息格式和已绑定会话。日程页可创建定时运行。聊天面板展示固定的 Skill、MCP，并可为后续消息选择文档库。[Web 功能逐项对照](docs/upstream/WEB-UI.md)
+
+在 Agent 设置中启用记忆后，新会话可以召回当前用户保存的事实。用户明确要求记住的事实可在该租户的其他 Agent 使用；真实模型自动归纳的摘要仅供同一用户、同一 Agent 使用，最后更新后保留 90 天。在[个人记忆页](http://127.0.0.1:8080/workspace/memory)可搜索并删除记录。已有聊天内容与审计记录按运行历史保留。作用域、升级与审批行为见[记忆实现说明](docs/upstream/MEMORY.md)。
 
 | 入口 | 行为 |
 |---|---|
 | Agent 配置 | 发布不可变版本，固定指令、模型、存储配置版本、Skill、MCP 与沙箱选项 |
 | 任务 | 提交、查看状态、流式输出、事件重播、取消、恢复、产物下载、查看模型调用与 Token |
 | 审批 | 查看文本预览、大小和动作摘要。服务端核验角色、有效期与摘要，重复决定复用同一回执 |
-| 资源与租户 | 技能中心和知识库分别提供技能版本与个人记忆管理入口。成员、配额和审计使用 Java 租户 API |
+| 资源与租户 | 技能中心管理版本；知识库可上传、检索并挂载个人文档，个人记忆单独管理。成员、配额和审计使用 Java 租户 API |
 | HTTP | 已认证的 `/v3/api-docs` 和 `/v3/api-docs.yaml` 提供 OpenAPI。平台任务事件流接受 `Last-Event-ID: runId:seq`。AG-UI 客户端使用协议 runId 重放 |
 
 `SH_STORE_BACKEND` 决定 SDK 存储。默认 `jdbc` 使用独立连接池，也能用 `SH_RUNTIME_JDBC_URL`、`SH_RUNTIME_JDBC_USER`、`SH_RUNTIME_JDBC_PASSWORD` 指向 MySQL、PostgreSQL、SQLite 或 H2。其他后端有 `redis`、`mongodb`、`oss`、`cos`。OSS/COS 使用对象存储承担工作区与快照，由 JDBC 承担带版本状态和执行锁。API 与 Worker 的 `SH_STORE_PROFILE`、`SH_STORE_VERSION` 必须对应同一份后端配置。更换存储时发布新 profile 版本，并保留旧 Worker 直到旧会话退出。[存储兼容记录](docs/upstream/API-COMPATIBILITY.md)

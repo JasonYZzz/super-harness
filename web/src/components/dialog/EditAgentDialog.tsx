@@ -58,6 +58,7 @@ export function EditAgentDialog({ open, onOpenChange, agent, onUpdated }: Props)
 				model: d.model ?? base.identity.model,
 				publish_artifact: !!d.publish_artifact,
 				sandbox: !!d.sandbox,
+				mcp_profile: d.mcp_profile ?? '',
 				use_memory: !!d.use_memory,
 				skill_ids: (d.skills ?? []).join(','),
 				system_prompt: d.system_prompt,
@@ -86,6 +87,7 @@ export function EditAgentDialog({ open, onOpenChange, agent, onUpdated }: Props)
 			await update(
 				agent.id,
 				{
+					mcp_profile: String(values.identity.mcp_profile ?? ''),
 					use_memory: Boolean(values.identity.use_memory),
 					skills: String(values.identity.skill_ids ?? '').split(',').filter(Boolean),
 					name, model:String(values.identity.model),publish_artifact:Boolean(values.identity.publish_artifact),sandbox:Boolean(values.identity.sandbox),

@@ -1,11 +1,12 @@
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { Trash2 } from 'lucide-react';
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { parseCronExpression, getFrequencyLabel } from './schedule-utils';
-import type { ScheduleRecord, SessionRecord } from '@/api';
+import type { ScheduleRecord } from '@/api';
 import { scheduleApi } from '@/api';
-import { StatusBadge } from '@/components/badge/StatusBadge';
+import type { ScheduledSession } from '@/api/schedule';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog';
 import { Button } from '@/components/ui/button';
 import {
@@ -35,23 +36,20 @@ export function ScheduleDetailDrawer({
 }: ScheduleDetailDrawerProps) {
 	const { t } = useTranslation();
 	const { agents } = useAgents();
+	const cache=useQueryClient();
+	const activation=useMutation({mutationFn:({id,enabled}:{id:string;enabled:boolean})=>scheduleApi.activate(id,enabled),
+		onSuccess:async()=>{await cache.invalidateQueries({queryKey:['schedules']});onOpenChange(false);}
+	});
 	const navigate = useNavigate();
 	const [openDeleteDialog, setOpenDeleteDialog] = React.useState(false);
-	const [sessions, setSessions] = React.useState<SessionRecord[]>([]);
-	const [sessionsLoading, setSessionsLoading] = React.useState(false);
-
-	React.useEffect(() => {
-		if (!schedule || !open) {
-			setSessions([]);
-			return;
-		}
-		setSessionsLoading(true);
-		scheduleApi
-			.listSessions(schedule.id)
-			.then((res) => setSessions(res.sessions))
-			.catch(() => setSessions([]))
-			.finally(() => setSessionsLoading(false));
-	}, [schedule, open]);
+	const history = useQuery({
+		queryKey: ['schedule-sessions', schedule?.id],
+		queryFn: () => scheduleApi.listSessions(schedule!.id),
+		enabled: open && !!schedule,
+		refetchInterval: open ? 10_000 : false,
+	});
+	const sessions: ScheduledSession[] = history.data?.sessions ?? [];
+	const sessionsLoading = history.isPending;
 
 	const handleDelete = async () => {
 		if (!schedule) return;
@@ -130,6 +128,7 @@ export function ScheduleDetailDrawer({
 					<DrawerHeader>
 						<DrawerTitle>{data.name}</DrawerTitle>
 						<DrawerDescription>{data.description}</DrawerDescription>
+						{schedule.last_error && <p role="alert">{schedule.last_error}</p>}
 					</DrawerHeader>
 					<div className="flex flex-1 flex-col overflow-hidden gap-y-4 p-4">
 						<div className="flex flex-col space-y-2">
@@ -158,6 +157,7 @@ export function ScheduleDetailDrawer({
 								{t('schedule.executionHistory')}
 							</h3>
 							<div className="flex-1 overflow-y-auto space-y-1">
+								{history.error && <p role="alert">{history.error.message}</p>}
 								{sessionsLoading && (
 									<div className="text-center py-4 text-muted-foreground text-sm">
 										{t('common.loading')}
@@ -183,13 +183,18 @@ export function ScheduleDetailDrawer({
 											<span className="text-muted-foreground">
 												{new Date(session.created_at).toLocaleString()}
 											</span>
-											<StatusBadge status="completed" />
+											<span className="text-xs">{session.status}</span>
 										</div>
 									))}
 							</div>
 						</div>
 					</div>
 					<DrawerFooter>
+						{activation.error && <p role="alert">{activation.error.message}</p>}
+						<Button variant="outline" disabled={activation.isPending}
+							onClick={()=>activation.mutate({id:schedule.id,enabled:!data.enabled})}>
+							{t(data.enabled?'harness.pauseSchedule':'harness.resumeSchedule')}
+						</Button>
 						<Button
 							variant="destructive"
 							size="sm"

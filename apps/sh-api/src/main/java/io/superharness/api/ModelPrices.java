@@ -9,6 +9,8 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
+import io.superharness.domain.Problem;
 import java.util.List;
 import java.util.Map;
 
@@ -62,4 +64,12 @@ class ModelPrices {
                                 env.getProperty("SH_MODEL_PRICING", "{}"),
                                 new TypeReference<Map<String, Rate>>() {}));
     }
+    Map<String, Object> settings(String model) {
+        if (!allowed.contains(model)) throw new Problem(400, "MODEL_NOT_ALLOWED");
+        var settings = new LinkedHashMap<String, Object>();
+        settings.put("model", model);
+        if (prices.containsKey(model)) settings.put("pricing", prices.get(model));
+        return settings;
+    }
+
 }

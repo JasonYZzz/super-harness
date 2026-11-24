@@ -47,11 +47,13 @@ public class Knowledge {
         var directories = new TreeSet<String>(String.CASE_INSENSITIVE_ORDER);
         for (String key : resources.keySet()) {
             String path = java.text.Normalizer.normalize(key, java.text.Normalizer.Form.NFC);
-            if (!path.startsWith("references/") || !files.add(path) || directories.contains(path))
+            boolean supported = path.startsWith("references/") || path.startsWith("scripts/") || path.startsWith("assets/");
+            if (!supported || !files.add(path) || directories.contains(path))
                 throw new Problem(400, "INVALID_SKILL_RESOURCE");
             String prefix = "";
             for (String segment : path.split("/", -1)) {
                 if (segment.isBlank() || segment.startsWith(".") || segment.endsWith(".")
+                        || segment.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 255
                         || !segment.matches("[\\p{L}\\p{N}_ ()+.\\-]+"))
                     throw new Problem(400, "INVALID_SKILL_RESOURCE");
                 if (!prefix.isEmpty()) {
@@ -124,14 +126,136 @@ public class Knowledge {
     }
 
     public List<Map<String, Object>> memories(Principal p) {
+        return memories(p, "", 0);
+    }
+
+    public List<Map<String, Object>> memories(Principal p, String query, int offset) {
         catalog.role(p);
         return sql.rows(
                 """
-                SELECT BIN_TO_UUID(id) AS id,content,created_at AS createdAt FROM memory_entries
-                WHERE tenant_id=? AND owner_id=? ORDER BY created_at DESC,id LIMIT 100
+                SELECT BIN_TO_UUID(m.id) AS id,m.content,m.created_at AS createdAt,m.source,
+                    a.name AS agentName,m.expires_at AS expiresAt FROM memory_entries m
+                LEFT JOIN agent_definitions a ON a.tenant_id=m.tenant_id AND a.id=m.agent_id
+                WHERE m.tenant_id=? AND m.owner_id=? AND LOCATE(LOWER(?),LOWER(m.content))>0
+                    AND (m.expires_at IS NULL OR m.expires_at>UTC_TIMESTAMP(6))
+                ORDER BY m.created_at DESC,m.id LIMIT 100 OFFSET ?
                 """,
                 p.tenant(),
-                p.user());
+                p.user(),
+                query,
+                offset);
+    }
+
+    public List<String> recall(
+            String tenant, String owner, UUID conversation, String query, int limit) {
+        return sql
+                .rows(
+                        """
+                        SELECT content FROM memory_entries WHERE tenant_id=? AND owner_id=?
+                            AND (source<>'LEGACY' OR conversation_id=?)
+                            AND (agent_id IS NULL OR agent_id=(SELECT agent_id FROM conversations WHERE id=?))
+                            AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP(6))
+                            AND LOCATE(LOWER(?),LOWER(content))>0
+                        ORDER BY created_at DESC,id LIMIT ?
+                        """,
+                        tenant,
+                        owner,
+                        conversation,
+                        conversation,
+                        query,
+                        limit)
+                .stream()
+                .map(row -> row.get("content").toString())
+                .toList();
+    }
+
+    public String legacyFile(String tenant, String owner, UUID conversation, String path) {
+        return sql
+                .rows(
+                        """
+                        SELECT content FROM memory_entries WHERE tenant_id=? AND owner_id=? AND conversation_id=?
+                        AND source='LEGACY' AND legacy_path=? ORDER BY legacy_part
+                        """,
+                        tenant,
+                        owner,
+                        conversation,
+                        path)
+                .stream()
+                .map(r -> r.get("content").toString())
+                .collect(java.util.stream.Collectors.joining());
+    }
+
+    /** Called inside the transaction publishing the fenced execution slot. */
+    public void publishMemory(Map<String, Object> run) {
+        if (run.get("pending_memory") == null) return;
+        var pending = sql.parse(run.get("pending_memory"));
+        var tenant = run.get("tenant_id");
+        var owner = run.get("requested_by");
+        var conversation = run.get("conversation_id");
+        for (var fact : pending.path("facts")) {
+            sql.update(
+                    """
+                    INSERT INTO memory_entries(id,tenant_id,owner_id,content,source)
+                    VALUES(?,?,?,?,'CHAT') ON DUPLICATE KEY UPDATE id=memory_entries.id
+                    """,
+                    UUID.randomUUID(),
+                    tenant,
+                    owner,
+                    fact.asText());
+        }
+        // Imported once, as the new slot no longer carries the old memory_files state.
+        int part = 0;
+        for (var note : pending.path("legacy")) {
+            String chunk = note.asText();
+            int newline = chunk.indexOf('\n');
+            sql.update(
+                    """
+                    INSERT INTO memory_entries(id,tenant_id,owner_id,content,source,agent_id,conversation_id,legacy_path,legacy_part)
+                    SELECT ?,tenant_id,owner_id,?,'LEGACY',agent_id,id,?,?
+                    FROM conversations WHERE tenant_id=? AND id=? AND owner_id=?
+                    """,
+                    UUID.randomUUID(),
+                    chunk.substring(newline + 1),
+                    chunk.substring(0, newline),
+                    part++,
+                    tenant,
+                    conversation,
+                    owner);
+        }
+        if (!pending.hasNonNull("summary")) return;
+        String summary = pending.get("summary").asText();
+        if (pending.hasNonNull("summaryId")) {
+            // A user may have deleted this summary since the attempt was claimed.
+            sql.update(
+                    """
+                    UPDATE memory_entries SET content=?,created_at=UTC_TIMESTAMP(6),
+                        expires_at=UTC_TIMESTAMP(6)+INTERVAL 90 DAY
+                    WHERE id=? AND tenant_id=? AND owner_id=? AND conversation_id=?
+                    """,
+                    summary,
+                    UUID.fromString(pending.get("summaryId").asText()),
+                    tenant,
+                    owner,
+                    conversation);
+        } else {
+            sql.update(
+                    """
+                    INSERT INTO memory_entries(id,tenant_id,owner_id,content,source,agent_id,conversation_id,expires_at)
+                    SELECT ?,tenant_id,owner_id,?,'SUMMARY',agent_id,id,UTC_TIMESTAMP(6)+INTERVAL 90 DAY
+                    FROM conversations WHERE tenant_id=? AND owner_id=? AND id=?
+                    ON DUPLICATE KEY UPDATE content=?,created_at=UTC_TIMESTAMP(6),expires_at=UTC_TIMESTAMP(6)+INTERVAL 90 DAY
+                    """,
+                    UUID.randomUUID(),
+                    summary,
+                    tenant,
+                    owner,
+                    conversation,
+                    summary);
+        }
+    }
+
+    public void pruneExpiredMemories() {
+        sql.update("DELETE FROM memory_entries WHERE expires_at<=UTC_TIMESTAMP(6) LIMIT 1000");
     }
 
     @Transactional

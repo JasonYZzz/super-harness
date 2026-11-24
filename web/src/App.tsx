@@ -1,4 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
+import { AudioLines } from 'lucide-react';
 import { Onborda, OnbordaProvider } from 'onborda';
 import { useMemo } from 'react';
 import {
@@ -17,17 +18,22 @@ import { RouteError } from '@/components/error/RouteError';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { buildChatTour } from '@/components/tour/chatTourSteps';
 import { TourCard } from '@/components/tour/TourCard';
+import { Empty, EmptyHeader, EmptyTitle, EmptyMedia } from '@/components/ui/empty';
 import { UploadProvider } from '@/context/UploadContext';
 import { useTranslation } from '@/i18n/useI18n';
 import { queryClient } from '@/lib/query-client';
 import { HttpChannels } from '@/pages/channel/HttpChannels';
 import { ChatPage } from '@/pages/chat';
-import { CredentialPage } from '@/pages/credential';
+import { ServerModels } from '@/pages/credential/ServerModels';
 import { HarnessResources } from '@/pages/HarnessResources';
-import { KnowledgePage } from '@/pages/knowledge';
+import { DocumentLibrary } from '@/pages/knowledge/DocumentLibrary';
 import { SchedulePage } from '@/pages/schedule';
 import { SetupPage } from '@/pages/setup';
-import { VoiceProfilePage } from '@/pages/voice-profile';
+
+function VoiceStatus() {
+  const {t}=useTranslation();
+  return <main className="m-2 flex flex-1 rounded-[22px] bg-card shadow-panel"><Empty><EmptyHeader><EmptyMedia variant="icon"><AudioLines/></EmptyMedia><EmptyTitle>{t('harness.noVoiceEngine')}</EmptyTitle></EmptyHeader></Empty></main>;
+}
 
 function WorkspaceRoute() {
 	const location = useLocation();
@@ -74,14 +80,14 @@ const router = createBrowserRouter([
 					},
 					{ path: '/schedule', element: <SchedulePage /> },
 					{ path: '/channel', element: <HttpChannels /> },
-					{ path: '/credential', element: <CredentialPage /> },
+					{ path: '/credential', element: <ServerModels /> },
 					{ path: '/mcp', element: <MCPHubPage /> },
 					{ path: '/mcp/:hubId', element: <MCPHubPage /> },
 					{ path: '/skill', element: <SkillHubPage /> },
 					{ path: '/skill/:hubId', element: <SkillHubPage /> },
-					{ path: '/knowledge', element: <KnowledgePage /> },
-					{ path: '/knowledge/:kbId', element: <KnowledgePage /> },
-					{ path: '/voice-profile', element: <VoiceProfilePage /> },
+					{ path: '/knowledge', element: <DocumentLibrary /> },
+					{ path: '/knowledge/:kbId', element: <DocumentLibrary /> },
+					{ path: '/voice-profile', element: <VoiceStatus /> },
 					{
 						path: '/workspace/skills',
 						element: <HarnessResources key="skills" skills />,

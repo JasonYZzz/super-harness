@@ -167,7 +167,7 @@ export function CreateScheduleDialog({ open, onOpenChange, onCreated }: Props) {
 				started_at: getScheduleStartAt(form.date, form.time, form.timezone),
 				ended_at:
 					form.freq === 'once'
-						? undefined
+						? getScheduleStartAt(form.date, form.time, form.timezone)
 						: getScheduleEndAt(form.endDate, form.timezone),
 				agent_id: form.agentId,
 				chat_model_config: form.chatModelConfig!,

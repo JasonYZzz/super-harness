@@ -48,7 +48,7 @@ export async function fixtures(env, tls, cleanup) {
     telemetry = [];
   const port = await listen(
     http(
-      handler((req, res, body) => {
+      handler(async (req, res, body) => {
         if (req.method === "GET" && req.url === "/keys")
           return json(res, { keys: [jwk] });
         if (req.method === "GET" && req.url.includes("well-known"))
@@ -78,6 +78,7 @@ export async function fixtures(env, tls, cleanup) {
           return res.writeHead(400).end();
         const request = JSON.parse(body);
         calls.push(request);
+        if(request.messages.at(-1)?.role === "user" && JSON.stringify(request.messages.at(-1)?.content).includes("queue-ui-fixture")) await new Promise(resolve=>setTimeout(resolve,5000));
         const lookup =
           request.messages.some((m) =>
             JSON.stringify(m.content)?.includes("lookup-fixture"),
@@ -105,12 +106,15 @@ export async function fixtures(env, tls, cleanup) {
           ["blocked-task-fixture", "TaskCreate", {subject:"must be blocked", description:"check plan write boundary"}],
           ["plan-file-fixture", "plan_write", {content:"Approved sample steps"}],
           ["memory-save-fixture", "memory_save", {content:"- remember-fixture-value"}],
+          ["document-search-fixture", "knowledge_search", {query:"antenna"}],
+          ["memory-find-fixture", "memory_search", {query:"older-private-note"}],
           ["memory-read-fixture", "memory_get", {path:"MEMORY.md", startLine:1, endLine:10}],
           ["skill-reference-fixture", "load_skill_through_path", {skillId, path:"references/guide.md"}],
           ["skill-load-fixture", "load_skill_through_path", {skillId, path:"SKILL.md"}],
         ];
         const requested = requests.find(([marker]) => current.includes(marker));
-        const fixtureTool = requested && {name:requested[1], arguments:JSON.stringify(requested[2])};
+        const curate = catalog.startsWith("Curate durable user memory");
+        const fixtureTool = !curate && requested && {name:requested[1], arguments:JSON.stringify(requested[2])};
         const delta = (lookup || plan || fixtureTool)
           ? {
               role: "assistant",
@@ -123,7 +127,7 @@ export async function fixtures(env, tls, cleanup) {
                 },
               ],
             }
-          : { role: "assistant", content: "provider fixture" };
+          : { role: "assistant", content: curate ? (current.includes("curate-fixture") ? "SUMMARY\nprefers short reports" : "NO_CHANGE") : "provider fixture" };
         const chunks = [
           { choices: [{ index: 0, delta, finish_reason: null }] },
           {

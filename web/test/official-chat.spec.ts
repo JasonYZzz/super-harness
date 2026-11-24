@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import { test, expect } from '@playwright/test';
 
-const cleanup = { agent: '', conversation: '' };
+const cleanup = { agent: '', conversation: '', skill: '' };
 test.afterEach(async ({ request }) => {
 	const headers = {
 		Authorization:
@@ -12,12 +12,14 @@ test.afterEach(async ({ request }) => {
 	for (const [resource, id] of [
 		['conversations', cleanup.conversation],
 		['agents', cleanup.agent],
+		['skills', cleanup.skill],
 	]) {
 		if (id)
 			expect(
 				(await request.delete('/api/v1/' + resource + '/' + id, { headers })).ok(),
 			).toBeTruthy();
 	}
+	cleanup.skill = '';
 	cleanup.agent = '';
 	cleanup.conversation = '';
 });
@@ -154,6 +156,103 @@ test('official AgentScope chat uses authenticated Java conversations, approvals 
 	);
 	expect(errors).toEqual([]);
 	expect(unexpectedApiRequests).toEqual([]);
+});
+
+test('upload a custom skill and select its version for an agent', async ({ page }) => {
+	const archive = process.env.SH_TEST_SKILL_ZIP;
+	test.skip(!archive, 'Requires the acceptance skill package');
+	const token = execFileSync('../scripts/dev-token.sh', { encoding: 'utf8' }).trim();
+	await page.addInitScript(value => {
+		sessionStorage.setItem('harness.access', value);
+		localStorage.setItem('chat_tour_done', '1');
+	}, token);
+	await page.goto('/skill');
+	await page.getByText('上传自定义技能', { exact: true }).click();
+	await page.getByLabel('技能文件').setInputFiles(archive!);
+	const version = 'ui-' + randomUUID();
+	await page.getByLabel('版本', { exact: true }).fill(version);
+	const published = page.waitForResponse(r => r.url().endsWith('/skills/import'));
+	await page.getByRole('button', { name: '发布版本' }).click();
+	expect((await published).ok()).toBeTruthy();
+	await expect(page.getByText(version, { exact: true })).toBeVisible();
+	const rows = await page.request.get('/api/v1/skills', { headers: { Authorization: 'Bearer ' + token } });
+	cleanup.skill = (await rows.json()).find((row: { version: string }) => row.version === version).id;
+	await page.goto('/chat');
+	await page.locator('#tour-create-agent').click();
+	await page.locator('#agent-form-identity-name').fill('Skill UI ' + randomUUID());
+	await page.getByRole('checkbox', { name: 'fixture-skill · ' + version }).check();
+	const created = page.waitForResponse(r => r.url().endsWith('/api/v1/agents') && r.request().method() === 'POST');
+	await page.getByRole('dialog').getByRole('button', { name: '创建', exact: true }).click();
+	const result = await created;
+	expect(result.ok()).toBeTruthy();
+	cleanup.agent = (await result.json()).agentId;
+	expect(result.request().postDataJSON().revision.skills).toEqual([cleanup.skill]);
+});
+
+test('personal memory can be saved, searched and deleted', async ({ page }) => {
+	const token = execFileSync('../scripts/dev-token.sh', { encoding: 'utf8' }).trim();
+	await page.addInitScript(value => sessionStorage.setItem('harness.access', value), token);
+	await page.goto('/workspace/memory');
+	const fact = 'memory-ui-' + randomUUID();
+	await page.getByLabel('内容').fill(fact);
+	const saved = page.waitForResponse(r => r.url().endsWith('/api/v1/memory') && r.request().method() === 'POST');
+	await page.getByRole('button', { name: '保存记忆' }).click();
+	const response = await saved;
+	expect(response.ok()).toBeTruthy();
+	const id = (await response.json()).id;
+	try {
+		await page.getByPlaceholder('搜索').fill(fact);
+		await expect(page.getByText(fact, { exact: true })).toBeVisible();
+		page.once('dialog', dialog => dialog.accept());
+		const deleted = page.waitForResponse(r => r.url().endsWith('/memory/' + id) && r.request().method() === 'DELETE');
+		await page.getByRole('button', { name: '删除', exact: true }).click();
+		expect((await deleted).ok()).toBeTruthy();
+		await expect(page.getByText(fact, { exact: true })).toHaveCount(0);
+	} finally {
+		await page.request.delete('/api/v1/memory/' + id, { headers: { Authorization: 'Bearer ' + token } });
+	}
+});
+
+test('queue and withdraw a follow-up while the model is answering', async ({page})=>{
+	const path=process.env.SH_TEST_QUEUE_PATH;
+	test.skip(!path,'Requires the delayed model fixture');
+	const token=execFileSync('../scripts/dev-token.sh',{encoding:'utf8'}).trim();
+	await page.addInitScript(value=>{sessionStorage.setItem('harness.access',value);localStorage.setItem('chat_tour_done','1');},token);
+	await page.goto(path!);
+	const input=page.getByPlaceholder('输入消息...');
+	await expect(input).toBeEnabled();
+	await input.fill('queue-ui-fixture');
+	await input.press('Enter');
+	await expect(page.getByText('queue-ui-fixture',{exact:true}).first()).toBeVisible();
+	await expect(input).toBeEnabled();
+	await input.fill('queued browser follow-up');
+	await input.press('Enter');
+	const withdraw=page.getByRole('button',{name:'撤回',exact:true});
+	await expect(withdraw).toBeVisible();
+	await withdraw.click();
+	await expect(withdraw).toHaveCount(0);
+});
+
+test('upload and search a private document from the knowledge page', async ({ page }) => {
+	const token = execFileSync('../scripts/dev-token.sh', { encoding: 'utf8' }).trim();
+	await page.addInitScript(value => sessionStorage.setItem('harness.access',value),token);
+	await page.goto('/knowledge');
+	const name='Library '+randomUUID();
+	await page.getByRole('textbox',{name:'知识库名称'}).fill(name);
+	await page.getByRole('button',{name:'创建',exact:true}).click();
+	await expect(page.getByRole('heading',{name,exact:true})).toBeVisible();
+	const libraryId=new URL(page.url()).pathname.split('/').at(-1);
+	try {
+		await page.getByLabel(/上传 UTF-8/).setInputFiles({name:'guide.md', mimeType:'text/markdown', buffer:Buffer.from('备用电池放在三号抽屉。')});
+		await expect(page.getByText('guide.md',{exact:true})).toBeVisible();
+		await page.getByRole('textbox',{name:'搜索文档内容'}).fill('备用电池');
+		await page.getByRole('button',{name:'搜索',exact:true}).click();
+		await expect(page.getByText('备用电池放在三号抽屉。',{exact:true})).toBeVisible();
+		await page.reload();
+		await expect(page.getByText('guide.md',{exact:true})).toBeVisible();
+	} finally {
+		await page.request.delete('/api/v1/libraries/'+libraryId,{headers:{Authorization:'Bearer '+token}});
+	}
 });
 
 test('all official sidebar routes and direct reloads use the Java origin', async ({ page }) => {

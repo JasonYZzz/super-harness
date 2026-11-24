@@ -17,13 +17,17 @@ public record AguiInput(
         String protocolVersion,
         String parentRunId) {
 
-    public sealed interface Extension permits Snapshot, TaskOperation {}
+    public sealed interface Extension permits Snapshot, Enqueue, TaskOperation {}
 
-    public sealed interface TaskOperation extends Extension permits Observe, Cancel, Recover {
+    public sealed interface TaskOperation extends Extension permits Observe, Cancel, Recover, Withdraw {
         UUID task();
     }
 
     public record Snapshot(String since) implements Extension {}
+
+    public record Enqueue() implements Extension {}
+
+    public record Withdraw(UUID task) implements TaskOperation {}
 
     public record Observe(UUID task) implements TaskOperation {}
 
@@ -38,6 +42,11 @@ public record AguiInput(
         if (context != null && !context.isEmpty()) throw new Problem(400, "UNSUPPORTED_CONTEXT");
         if (parentRunId != null) throw new Problem(400, "UNSUPPORTED_BRANCH");
         if (forwardedProps == null || forwardedProps.isEmpty()) return null;
+        if (forwardedProps.equals(Map.of("harness.enqueue", true))) {
+            if (messages == null || messages.size()!=1 || (resume != null && !resume.isEmpty()))
+                throw new Problem(400,"AMBIGUOUS_AGUI_INPUT");
+            return new Enqueue();
+        }
         if ((messages != null && !messages.isEmpty()) || (resume != null && !resume.isEmpty()))
             throw new Problem(400, "AMBIGUOUS_AGUI_INPUT");
         if (forwardedProps.size() != 1) throw new Problem(400, "UNSUPPORTED_FORWARDED_PROPS");
@@ -52,6 +61,7 @@ public record AguiInput(
                 }
                 throw new Problem(400, "INVALID_SNAPSHOT_CURSOR");
             }
+            case "harness.withdraw" -> new Withdraw(taskId(prop.getValue()));
             case "harness.observe" -> new Observe(taskId(prop.getValue()));
             case "harness.cancel" -> new Cancel(taskId(prop.getValue()));
             case "harness.recover" -> {

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 
 import type { AgentSchemaV2Response, JSONSchema, JSONSchemaProperty } from '@/api';
+import { mcpApi } from '@/api/mcp';
 import { skillVersions } from '@/api/skill';
 import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
 import {
@@ -88,6 +89,7 @@ export function AgentFormFields({ schema, values, onChange }: Props) {
 	const { t } = useTranslation();
 	const sections = sliceSchema(schema.schema);
 	const skills = useQuery(skillVersions);
+	const profiles = useQuery({queryKey: ['mcp-profiles'],queryFn:mcpApi.list});
 	const selected = String(values.identity.skill_ids ?? '').split(',').filter(Boolean);
 
 	const rows: Array<{ key: AgentSection; i18n: string; sectionSchema: JSONSchema }> = [
@@ -157,6 +159,16 @@ export function AgentFormFields({ schema, values, onChange }: Props) {
 					</label>
 				))}
 			</FieldSet>}
+		{(Boolean(profiles.data?.length) || values.identity.mcp_profile) && (
+				<label className="grid gap-2 text-sm">MCP
+					<select className="rounded-md border bg-card p-2" value={String(values.identity.mcp_profile ?? '')}
+						onChange={event => onChange('identity','mcp_profile',event.target.value)}>
+						<option value="">{t('harness.noMcp')}</option>
+						{profiles.data?.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.version}</option>)}
+					</select>
+				</label>
+			)}
+			{profiles.error && <p role="alert">{profiles.error.message}</p>}
 		</FieldGroup>
 	);
 }

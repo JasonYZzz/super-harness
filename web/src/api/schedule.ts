@@ -1,24 +1,20 @@
-import { client } from './client';
-import type {
-	CreateScheduleRequest,
-	CreateScheduleResponse,
-	ScheduleListResponse,
-	ScheduleRecord,
-	ScheduleSessionsResponse,
-	UpdateScheduleRequest,
-} from './types';
+import { api } from './harness';
+import type { CreateScheduleRequest, CreateScheduleResponse, ScheduleListResponse } from './types';
 
+export interface ScheduledSession {
+	id: string;
+	created_at: string;
+	status: string | null;
+}
 export const scheduleApi = {
-	list: () => client.get<ScheduleListResponse>('/schedule/'),
-
-	create: (body: CreateScheduleRequest) =>
-		client.post<CreateScheduleResponse>('/schedule/', body),
-
-	update: (scheduleId: string, body: UpdateScheduleRequest) =>
-		client.patch<ScheduleRecord>(`/schedule/${scheduleId}`, body),
-
-	delete: (scheduleId: string) => client.delete(`/schedule/${scheduleId}`),
-
-	listSessions: (scheduleId: string) =>
-		client.get<ScheduleSessionsResponse>(`/schedule/${scheduleId}/sessions`),
+	list: () => api<ScheduleListResponse>('/schedules'),
+	create: ({ chat_model_config, ...body }: CreateScheduleRequest) =>
+		api<CreateScheduleResponse>('/schedules', 'POST', {
+			...body,
+			model: chat_model_config.model,
+		}),
+	activate: (id: string, enabled: boolean) => api<void>('/schedules/' + id, 'PATCH', { enabled }),
+	delete: (id: string) => api<void>('/schedules/' + id, 'DELETE'),
+	listSessions: (id: string) =>
+		api<{ sessions: ScheduledSession[] }>('/schedules/' + id + '/sessions'),
 };

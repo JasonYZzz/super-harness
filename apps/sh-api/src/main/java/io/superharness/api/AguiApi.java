@@ -42,7 +42,7 @@ class AguiApi {
             summary = "Execute or replay a durable AG-UI interaction",
             description =
                     "Submit text, resume an interrupt, or use a Harness extension (harness.snapshot,"
-                        + " harness.observe, harness.cancel, harness.recover). Repeating the"
+                        + " harness.observe, harness.cancel, harness.recover, harness.enqueue, harness.withdraw). Repeating the"
                         + " original input replays the complete interaction.")
     @io.swagger.v3.oas.annotations.parameters.RequestBody(
             required = true,
@@ -160,6 +160,8 @@ class AguiApi {
                 throw Problem.missing();
             if (operation instanceof AguiInput.Cancel cancel) {
                 lifecycle.cancel(p, cancel.task());
+            } else if (operation instanceof AguiInput.Withdraw withdraw) {
+                lifecycle.withdraw(p, withdraw.task());
             } else if (operation instanceof AguiInput.Recover recover) {
                 lifecycle.resume(p, recover.task(), recover.attempt());
             } else {
@@ -187,6 +189,7 @@ class AguiApi {
                     runs.submitInteraction(
                             p, input.threadId(), input.runId(), message.id(), message.text());
             var id = UUID.fromString(task.get("runId").toString());
+            if (extension instanceof AguiInput.Enqueue) return RunStream.response(request, out -> projection(input,p,id,null,out).acknowledge(id));
             return RunStream.response(
                     request,
                     out ->

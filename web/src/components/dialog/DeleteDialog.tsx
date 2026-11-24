@@ -1,6 +1,7 @@
 import { Loader2, CheckCircle, CircleAlert } from 'lucide-react';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -38,6 +39,8 @@ export function DeleteDialog({
 		try {
 			await onConfirm();
 			onOpenChange(false);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : String(error));
 		} finally {
 			setDeleting(false);
 		}

@@ -349,11 +349,31 @@ export function useAguiThread(threadId: string | null) {
 	}
 	const canSend =
 		!!threadId && !busy && !retry && !active && !interrupt && !view.archived && !!view.cursor;
-	async function control(turn: Turn, action: 'cancel' | 'recover') {
+	const canQueue = !!threadId && !!view.cursor && !view.archived && !retry && !interrupt
+		&& !!active && ['QUEUED','CLAIMED','RUNNING'].includes(active.status);
+
+	async function enqueue(text: string) {
+		if (!canQueue || !threadId || !text.trim()) throw new Error('当前会话无法排队');
+		const queueKey = key + '.enqueue';
+		const previous = readCommand(queueKey);
+		const cmd = previous?.kind === 'send' && previous.text === text ? previous : {
+			kind:'send', text, id:crypto.randomUUID(), runId:crypto.randomUUID(),
+		};
+		sessionStorage.setItem(queueKey,JSON.stringify(cmd));
+		const agent=threadAgent(threadId,[{role:'user',id:cmd.id,content:text}]);
+		const {result}=await agent.runAgent({runId:cmd.runId,forwardedProps:{'harness.enqueue':true}});
+		if (!result?.taskId) throw new Error('未收到排队回执');
+		sessionStorage.removeItem(queueKey);
+		const now=new Date().toISOString();
+		setView(v=>v.turns.some(t=>t.runId===result.taskId)?v:{...v,turns:[...v.turns,{
+			runId:result.taskId,messageId:cmd.id,input:text,status:'QUEUED',attempt:0,createdAt:now,updatedAt:now,
+		}]});
+	}
+	async function control(turn: Turn, action: 'cancel' | 'recover' | 'withdraw') {
 		if (!threadId) throw new Error('请先选择会话');
 		const forwardedProps =
-			action === 'cancel'
-				? { 'harness.cancel': turn.runId }
+			action !== 'recover'
+				? { ['harness.' + action]: turn.runId }
 				: { 'harness.recover': { taskId: turn.runId, attempt: turn.attempt } };
 		const { result } = await threadAgent(threadId).runAgent({ forwardedProps });
 		if (result?.taskId !== turn.runId) throw new Error('未收到任务操作回执');
@@ -388,6 +408,8 @@ export function useAguiThread(threadId: string | null) {
 		interrupt,
 		busy,
 		canSend,
+		canQueue,
+		enqueue,
 		usage: usage && usage.task === (active ?? view.turns.at(-1))?.runId ? usage.tokens : undefined,
 		error,
 		retry,

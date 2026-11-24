@@ -184,6 +184,7 @@ public class HarnessRuntime implements AgentRuntime {
                         .disableToolsConfig()
                         .disableMemoryHooks()
                         .disableTranscript()
+                        .disableCompaction()
                         .maxIters(8);
         if (!turn.memoryEnabled()) builder.disableMemoryTools().disableWorkspaceContext();
         var writtenPlan = new AtomicReference<String>();
@@ -237,12 +238,35 @@ public class HarnessRuntime implements AgentRuntime {
         if (turn.sandbox()) builder.stateStore(states).filesystem(sandbox.prepare(turn));
         else
             builder.distributedStore(store)
-                    .filesystem(new RemoteFilesystemSpec().isolationScope(IsolationScope.SESSION))
+                    .filesystem(
+                            new RemoteFilesystemSpec()
+                                    .addSharedPrefix("large_tool_results/")
+                                    .isolationScope(IsolationScope.SESSION))
                     .disableShellTool()
                     .disableFilesystemTools();
         var model =
                 turn.model().equals("local-echo") ? new LocalModel() : resolveModel(turn.model());
         var metered = new MeteredModel(model, meter);
+        var legacy =
+                turn.memoryEnabled() && turn.previousSlot() != null
+                        ? states.get(
+                                user,
+                                turn.previousSlot().toString(),
+                                "memory_files",
+                                MemoryFiles.class)
+                        : Optional.<MemoryFiles>empty();
+        var recent = new ArrayList<>(turn.recall().recent());
+        legacy.map(MemoryFiles::files)
+                .map(files -> files.get("MEMORY.md"))
+                .filter(text -> !text.isBlank())
+                .ifPresent(text -> recent.add(text.substring(0, Math.min(text.length(), 2000))));
+        var compaction = new TurnCompaction(metered, recent);
+        builder.middleware(compaction);
+        if (!turn.sandbox())
+            builder.toolResultEviction(
+                    io.agentscope.harness.agent.memory.compaction.ToolResultEvictionConfig.builder()
+                            .evictionPath("large_tool_results/" + session)
+                            .build());
         var searchOptions = searchOptions(turn.model());
         if (searchOptions != null) {
             builder.generateOptions(searchOptions);
@@ -264,11 +288,22 @@ public class HarnessRuntime implements AgentRuntime {
             if (mcp != null) mcp.close();
             throw failure;
         }
+        var manager = agent.getWorkspaceManager();
+        compaction.bind(manager);
+        var personal =
+                new PersonalMemoryTools(
+                        turn, meter, legacy.map(MemoryFiles::files).orElse(Map.of()));
         try {
-            if (turn.memoryEnabled() && turn.previousSlot() != null) {
-                states.get(user, turn.previousSlot().toString(), "memory_files", MemoryFiles.class)
-                        .ifPresent(memory -> memory.restore(agent.getWorkspaceManager(), context));
+            if (!turn.sandbox())
+                agent.getToolkit()
+                        .registerTool(new ToolOutputReader(manager.getFilesystem(), meter));
+            if (turn.memoryEnabled()) {
+                for (String name :
+                        List.of("memory_save", "memory_search", "memory_get", "session_search"))
+                    agent.getToolkit().removeTool(name);
+                agent.getToolkit().registerTool(personal);
             }
+            if (turn.libraryId()!=null) agent.getToolkit().registerTool(new DocumentSearch(meter));
             agent.getToolkit().registerTool(new PlanTools());
             agent.getToolkit().registerTool(new ReadPlanTool(agent.getWorkspaceManager()));
             agent.getToolkit().registerTool(new DelegateTool(metered, searchOptions));
@@ -282,7 +317,6 @@ public class HarnessRuntime implements AgentRuntime {
                                     .userId(user)
                                     .sessionId(turn.previousSlot().toString())
                                     .build();
-                    var manager = agent.getWorkspaceManager();
                     String plan = manager.readManagedWorkspaceFileUtf8(prior, planFile);
                     if (plan != null && !plan.isEmpty())
                         manager.writeUtf8WorkspaceRelative(context, planFile, plan);
@@ -327,11 +361,8 @@ public class HarnessRuntime implements AgentRuntime {
                     throw new IllegalStateException(
                             "Run ended without a committed reply and state");
                 if (turn.memoryEnabled())
-                    states.save(
-                            user,
-                            session,
-                            "memory_files",
-                            MemoryFiles.capture(agent.getWorkspaceManager(), context));
+                    personal.finish(
+                            metered, legacy.map(MemoryFiles::importNotes).orElse(List.of()));
                 if (turn.sandbox()) sandbox.verify(turn.slot());
                 String draft = writtenPlan.get();
                 if (draft != null && !draft.isBlank() && !result.get().contains(draft))

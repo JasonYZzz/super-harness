@@ -134,21 +134,13 @@ public class CatalogApi {
 
     public record ModelSelection(@NotBlank @Size(max = 120) String model) {}
 
-    private Map<String, Object> modelSettings(String model) {
-        if (!prices.allowed.contains(model)) throw new Problem(400, "MODEL_NOT_ALLOWED");
-        var settings = new LinkedHashMap<String, Object>();
-        settings.put("model", model);
-        if (prices.prices.containsKey(model)) settings.put("pricing", prices.prices.get(model));
-        return settings;
-    }
-
     @PutMapping("/conversations/{id}/model")
     void selectModel(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable UUID id,
             @Valid @RequestBody ModelSelection body) {
         catalog.changeConversation(
-                Identity.principal(jwt), id, null, false, modelSettings(body.model()), null);
+                Identity.principal(jwt), id, null, false, prices.settings(body.model()), null);
     }
 
     public record PermissionSelection(
@@ -161,6 +153,11 @@ public class CatalogApi {
             @PathVariable UUID id,
             @RequestBody @Valid PermissionSelection body) {
         catalog.changeConversation(Identity.principal(jwt), id, null, false, null, body.mode());
+    }
+
+    @GetMapping("/conversations/{id}/resources")
+    Object resources(@AuthenticationPrincipal Jwt jwt,@PathVariable UUID id) {
+        return catalog.conversationResources(Identity.principal(jwt), id);
     }
 
     @GetMapping("/conversations")
@@ -190,6 +187,6 @@ public class CatalogApi {
                         Identity.principal(jwt),
                         body.agentId(),
                         body.agentRevisionId(),
-                        body.model() == null ? null : modelSettings(body.model())));
+                        body.model() == null ? null : prices.settings(body.model())));
     }
 }

@@ -65,6 +65,7 @@ public class Catalog {
                 sql.rows(
                         """
                         SELECT BIN_TO_UUID(c.id) AS id,BIN_TO_UUID(c.agent_id) AS agentId,BIN_TO_UUID(c.revision_id) AS revisionId,
+                         BIN_TO_UUID(c.schedule_id) AS scheduleId,t.source AS channelSource,t.thread_key AS channelThread,
                          c.owner_id AS ownerId,COALESCE((SELECT LEAST(c.created_at,MIN(r.accepted_at)) FROM agent_runs r
                            WHERE r.tenant_id=c.tenant_id AND r.conversation_id=c.id),c.created_at) AS createdAt,
                          COALESCE(c.model_override->>'$.model',v.model) AS model,c.permission_mode AS permissionMode,
@@ -74,6 +75,7 @@ public class Catalog {
                          (SELECT r.status FROM agent_runs r WHERE r.tenant_id=c.tenant_id AND r.conversation_id=c.id
                            ORDER BY r.accepted_at DESC,r.id DESC LIMIT 1) AS status
                         FROM conversations c JOIN agent_revisions v ON v.tenant_id=c.tenant_id AND v.id=c.revision_id
+                        LEFT JOIN channel_threads t ON t.tenant_id=c.tenant_id AND t.conversation_id=c.id
                         WHERE c.tenant_id=? AND c.owner_id=? AND c.agent_id=? AND c.archived=FALSE ORDER BY createdAt DESC,c.id
                         """,
                         p.tenant(),
@@ -81,6 +83,27 @@ public class Catalog {
                         agent);
         rows.forEach(row -> Sql.utcTimes(row, "createdAt"));
         return rows;
+    }
+
+    public Map<String,Object> conversationResources(Principal p, UUID id) {
+        role(p);
+        var row=sql.first("""
+            SELECT r.revision,r.config,BIN_TO_UUID(c.library_id) AS libraryId FROM conversations c JOIN agent_revisions r
+            ON r.tenant_id=c.tenant_id AND r.id=c.revision_id
+            WHERE c.tenant_id=? AND c.owner_id=? AND c.id=?
+            """,p.tenant(),p.user(),id).orElseThrow(Problem::missing);
+        var config=sql.parse(row.remove("config"));
+        var skills=new ArrayList<Map<String,String>>();
+        for(var skill:config.path("skills")) {
+            skills.add(Map.of("name",skill.path("name").asText(),"version",skill.path("version").asText(),
+                "description",skill.path("description").asText()));
+        }
+        row.put("skills",skills);
+        var mcp=config.path("mcp");
+        if(mcp.isObject()) row.put("mcp", Map.of("id",mcp.path("id").asText(),"version",mcp.path("version").asText(),
+            "tools",mcp.path("readOnlyTools")));
+        row.put("useMemory",config.path("useMemory").asBoolean());
+        return row;
     }
 
     @Transactional

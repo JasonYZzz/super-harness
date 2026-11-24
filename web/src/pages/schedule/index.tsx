@@ -23,7 +23,8 @@ function expandScheduleToEvents(
 	const { data } = schedule;
 	try {
 		const interval = CronExpressionParser.parse(data.cron_expression, {
-			currentDate: rangeStart,
+			currentDate: new Date(rangeStart.getTime() - 1),
+			tz: data.timezone,
 			endDate: rangeEnd,
 		});
 		const startTs = new Date(data.started_at).getTime();
@@ -51,7 +52,7 @@ function expandScheduleToEvents(
 
 export function SchedulePage() {
 	const { t } = useTranslation();
-	const { schedules, remove, refetch } = useSchedules();
+	const { schedules, error, remove, refetch } = useSchedules();
 	const [viewMode, setViewMode] = React.useState<'calendar' | 'list'>('calendar');
 	const [currentDate, setCurrentDate] = React.useState(new Date());
 	const [selectedSchedule, setSelectedSchedule] = React.useState<ScheduleRecord | null>(null);
@@ -89,7 +90,7 @@ export function SchedulePage() {
 						</div>
 					</div>
 					<div className="flex items-center gap-2">
-						<Button disabled size="icon-sm" onClick={() => setIsCreateOpen(true)}>
+						<Button aria-label={t('common.create')} size="icon-sm" onClick={() => setIsCreateOpen(true)}>
 							<Plus />
 						</Button>
 						<Tabs
@@ -110,6 +111,7 @@ export function SchedulePage() {
 					</div>
 				</div>
 				<Separator />
+				{error && <p role="alert" className="px-6">{error.message}</p>}
 
 				<div className="flex-1 overflow-hidden">
 					{viewMode === 'calendar' && (

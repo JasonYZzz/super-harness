@@ -147,6 +147,40 @@
         }
       }
     },
+    "/api/v1/conversations/{id}/library": {
+      "put": {
+        "tags": [
+          "document-api"
+        ],
+        "operationId": "attach",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Selection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/v1/skills": {
       "get": {
         "tags": [
@@ -195,12 +229,129 @@
         }
       }
     },
+    "/api/v1/skills/import": {
+      "post": {
+        "tags": [
+          "knowledge-api"
+        ],
+        "operationId": "importArchive",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "maxLength": 80,
+                    "minLength": 0
+                  },
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file",
+                  "version"
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schedules": {
+      "get": {
+        "tags": [
+          "schedule-api"
+        ],
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "schedule-api"
+        ],
+        "operationId": "create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Schedule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/memory": {
       "get": {
         "tags": [
           "knowledge-api"
         ],
-        "operationId": "list",
+        "operationId": "list_1",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "maxLength": 256,
+              "minLength": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -224,6 +375,124 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/Memory"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/libraries": {
+      "get": {
+        "tags": [
+          "document-api"
+        ],
+        "operationId": "list_2",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "document-api"
+        ],
+        "operationId": "create_1",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Library"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/libraries/{id}/documents": {
+      "get": {
+        "tags": [
+          "document-api"
+        ],
+        "operationId": "documents",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "document-api"
+        ],
+        "operationId": "add",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Document"
               }
             }
           },
@@ -386,7 +655,7 @@
         "tags": [
           "catalog-api"
         ],
-        "operationId": "create",
+        "operationId": "create_2",
         "requestBody": {
           "content": {
             "application/json": {
@@ -487,7 +756,7 @@
           "agui-api"
         ],
         "summary": "Execute or replay a durable AG-UI interaction",
-        "description": "Submit text, resume an interrupt, or use a Harness extension (harness.snapshot, harness.observe, harness.cancel, harness.recover). Repeating the original input replays the complete interaction.",
+        "description": "Submit text, resume an interrupt, or use a Harness extension (harness.snapshot, harness.observe, harness.cancel, harness.recover, harness.enqueue, harness.withdraw). Repeating the original input replays the complete interaction.",
         "operationId": "run",
         "requestBody": {
           "content": {
@@ -640,6 +909,62 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/schedules/{id}": {
+      "delete": {
+        "tags": [
+          "schedule-api"
+        ],
+        "operationId": "remove",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "schedule-api"
+        ],
+        "operationId": "activate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Activation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
           }
         }
       }
@@ -879,12 +1204,43 @@
         }
       }
     },
+    "/api/v1/schedules/{id}/sessions": {
+      "get": {
+        "tags": [
+          "schedule-api"
+        ],
+        "operationId": "sessions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runs": {
       "get": {
         "tags": [
           "run-api"
         ],
-        "operationId": "list_1",
+        "operationId": "list_3",
         "responses": {
           "200": {
             "description": "OK",
@@ -1017,7 +1373,7 @@
         "tags": [
           "approval-api"
         ],
-        "operationId": "list_2",
+        "operationId": "list_4",
         "parameters": [
           {
             "name": "id",
@@ -1049,6 +1405,76 @@
           "catalog-api"
         ],
         "operationId": "mcpProfiles",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/libraries/{id}/search": {
+      "get": {
+        "tags": [
+          "document-api"
+        ],
+        "operationId": "search",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{id}/resources": {
+      "get": {
+        "tags": [
+          "catalog-api"
+        ],
+        "operationId": "resources",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -1182,6 +1608,63 @@
           }
         }
       }
+    },
+    "/api/v1/libraries/{id}": {
+      "delete": {
+        "tags": [
+          "document-api"
+        ],
+        "operationId": "remove_1",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/v1/libraries/{id}/documents/{doc}": {
+      "delete": {
+        "tags": [
+          "document-api"
+        ],
+        "operationId": "removeDoc",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "doc",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1261,6 +1744,15 @@
           "model"
         ]
       },
+      "Selection": {
+        "type": "object",
+        "properties": {
+          "libraryId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "Skill": {
         "type": "object",
         "properties": {
@@ -1296,6 +1788,63 @@
           "version"
         ]
       },
+      "Schedule": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 0
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 16000,
+            "minLength": 0
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cron_expression": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "[0-9]{1,2} [0-9]{1,2} (?:[0-9]{1,2}|\\*) (?:[0-9]{1,2}|\\*) (?:[0-7]|\\*)"
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 0
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stateful": {
+            "type": "boolean"
+          },
+          "permission_mode": {
+            "type": "string",
+            "pattern": "default|accept_edits|explore|bypass|dont_ask|plan"
+          }
+        },
+        "required": [
+          "agent_id",
+          "cron_expression",
+          "model",
+          "name",
+          "permission_mode",
+          "started_at",
+          "timezone"
+        ]
+      },
       "Memory": {
         "type": "object",
         "properties": {
@@ -1307,6 +1856,38 @@
         },
         "required": [
           "text"
+        ]
+      },
+      "Library": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 0
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "Document": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 180,
+            "minLength": 0
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 65536,
+            "minLength": 0
+          }
+        },
+        "required": [
+          "content",
+          "name"
         ]
       },
       "Conversation": {
@@ -1478,6 +2059,17 @@
             "type": "string"
           }
         }
+      },
+      "Activation": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ]
       },
       "ConversationName": {
         "type": "object",

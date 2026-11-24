@@ -7,15 +7,14 @@ import { useTranslation } from '@/i18n/useI18n';
 
 const pages: Record<
 	string,
-	{ message: string; readOnly?: boolean; link?: string; label?: string }
+	{ message: string; link?: string; label?: string }
 > = {
 	schedule: { message: 'harness.schedule' },
 	channel: { message: 'harness.channel' },
-	credential: { message: 'harness.credential', readOnly: true },
-	'voice-profile': { message: 'harness.voice', readOnly: true },
+	credential: { message: 'harness.credential' },
+	'voice-profile': { message: 'harness.voice' },
 	knowledge: {
 		message: 'harness.knowledge',
-		readOnly: true,
 		link: '/workspace/memory',
 		label: 'harness.memory',
 	},
@@ -43,13 +42,7 @@ export function AppLayout() {
 							)}
 						</aside>
 					)}
-					{page?.readOnly ? (
-						<div inert className="flex flex-1 min-h-0 flex-col">
-							<Outlet />
-						</div>
-					) : (
-						<Outlet />
-					)}
+					<Outlet />
 				</SidebarInset>
 			</SidebarProvider>
 		</div>

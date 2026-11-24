@@ -129,6 +129,31 @@ class WorkerLoop {
                             lifecycle.plan(e, tasks);
                         }
 
+                        public java.util.List<String> searchSession(String query, int limit) {
+                            return lifecycle.searchSession(e, query, limit);
+                        }
+
+                        public String searchDocuments(String query) { return lifecycle.searchDocuments(e,query); }
+
+                        public String legacyFile(String path) {
+                            return lifecycle.legacyFile(e, path);
+                        }
+
+                        public boolean publishedSlot(UUID slot) {
+                            return lifecycle.publishedSlot(e, slot);
+                        }
+
+                        public java.util.List<String> searchMemory(String query) {
+                            return lifecycle.searchMemory(e, query);
+                        }
+
+                        public void stageMemory(
+                                java.util.List<String> facts,
+                                String summary,
+                                java.util.List<String> legacy) {
+                            lifecycle.stageMemory(e, facts, summary, legacy);
+                        }
+
                         public void tool(String name) {
                             span.addEvent("tool.call");
                             lifecycle.readTool(e, name);

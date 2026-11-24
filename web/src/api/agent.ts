@@ -15,7 +15,7 @@ export const agentApi = {
 					system_prompt: { type: 'string', title: '系统指令' },
 					model: { type: 'string', title: '模型', enum: models, default: defaultModel ?? models[0] },
 					publish_artifact: { type: 'boolean', title: '审批后发布文本产物', default: false },
-					use_memory: { type: 'boolean', title: '使用当前用户保存的记忆', default: false },
+					use_memory: { type: 'boolean', title: '使用个人记忆并自动归纳当前 Agent 的长期事实', default: false },
 					sandbox: { type: 'boolean', title: '启用沙箱', default: false },
 				},
 			},

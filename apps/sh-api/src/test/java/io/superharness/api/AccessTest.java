@@ -245,6 +245,108 @@ class AccessTest {
     @Autowired io.superharness.persistence.TenantSettings tenants;
 
     @Test
+    void memoryPublicationFollowsApprovalOwnershipAndDeletion() {
+        var p = new io.superharness.domain.Principal("memory-audit", "writer");
+        sql.update("INSERT INTO tenants(id) VALUES(?)", p.tenant());
+        sql.update(
+                "INSERT INTO memberships(tenant_id,user_id,role) VALUES(?,?,'OWNER')",
+                p.tenant(),
+                p.user());
+        var agent = catalog.createAgent(p, "writer");
+        var revision =
+                catalog.publish(
+                        p,
+                        agent,
+                        "test",
+                        "local-echo",
+                        "mem",
+                        1,
+                        java.util.Map.of("useMemory", true, "outputMode", "APPROVED_ARTIFACT"));
+        var conv = catalog.conversation(p, agent, revision);
+        var sibling = catalog.conversation(p, agent, revision);
+        for (boolean approve : java.util.List.of(false, true)) {
+            runs.submit(p, conv, agent, revision, "fact", "approval-" + approve, 120);
+            var e = scheduler.claim("W", "mem", 1).orElseThrow();
+            lifecycle.start(e);
+            lifecycle.stageMemory(
+                    e,
+                    java.util.List.of("remember this"),
+                    "agent summary",
+                    java.util.List.of("MEMORY.md\nlegacy"));
+            lifecycle.awaitApproval(e, "done", artifacts.stage(p.tenant(), "done"));
+            assertEquals(0, knowledge.memories(p).size());
+            var proposal = approvals.pending(p).getFirst();
+            var id = java.util.UUID.fromString((String) proposal.get("id"));
+            approvals.decide(p, id, (String) proposal.get("argsHash"), approve);
+            approvals.decide(p, id, (String) proposal.get("argsHash"), approve);
+            assertEquals(approve ? 3 : 0, knowledge.memories(p).size());
+        }
+        assertEquals(2, knowledge.recall(p.tenant(), p.user(), sibling, "", 10).size());
+        assertEquals(3, knowledge.recall(p.tenant(), p.user(), conv, "", 10).size());
+        var other = catalog.createAgent(p, "other");
+        var otherRevision =
+                catalog.publish(
+                        p,
+                        other,
+                        "test",
+                        "local-echo",
+                        "mem",
+                        1,
+                        java.util.Map.of("useMemory", true));
+        var otherChat = catalog.conversation(p, other, otherRevision);
+        assertEquals(
+                java.util.List.of("remember this"),
+                knowledge.recall(p.tenant(), p.user(), otherChat, "", 10));
+        runs.submit(p, conv, agent, revision, "next", "delete", 120);
+        var pending = scheduler.claim("W", "mem", 1).orElseThrow();
+        lifecycle.start(pending);
+        knowledge.forget(p, pending.turn().recall().summaryId());
+        lifecycle.stageMemory(
+                pending, java.util.List.of("remember this"), "stale", java.util.List.of());
+        lifecycle.finish(pending, "reply", null);
+        assertEquals(0, knowledge.memories(p, "stale", 0).size());
+        assertEquals(2, knowledge.memories(p).size());
+        runs.submit(p, conv, agent, revision, "failed", "fail", 120);
+        var failed = scheduler.claim("W", "mem", 1).orElseThrow();
+        lifecycle.start(failed);
+        lifecycle.stageMemory(
+                failed, java.util.List.of("never published"), null, java.util.List.of());
+        lifecycle.finish(failed, null, "FIXTURE");
+        assertEquals(0, knowledge.memories(p, "never published", 0).size());
+        runs.submit(p, conv, agent, revision, "recover", "recover", 120);
+        var lost = scheduler.claim("W", "mem", 1).orElseThrow();
+        lifecycle.start(lost);
+        lifecycle.stageMemory(
+                lost, java.util.List.of("unpublished attempt"), null, java.util.List.of());
+        sql.update(
+                "UPDATE agent_runs SET lease_deadline=UTC_TIMESTAMP(6)-INTERVAL 1 SECOND WHERE"
+                    + " id=?",
+                lost.run());
+        org.junit.jupiter.api.Assertions.assertTrue(lifecycle.reapOne());
+        org.junit.jupiter.api.Assertions.assertThrows(
+                io.superharness.domain.Problem.class, () -> lifecycle.finish(lost, "stale", null));
+        lifecycle.resume(p, lost.run(), lost.attempt());
+        var retry = scheduler.claim("W", "mem", 1).orElseThrow();
+        lifecycle.start(retry);
+        lifecycle.stageMemory(retry, java.util.List.of(), "new summary", java.util.List.of());
+        lifecycle.finish(retry, "ok", null);
+        assertEquals(0, knowledge.memories(p, "unpublished attempt", 0).size());
+        sql.update(
+                "UPDATE memory_entries SET expires_at=UTC_TIMESTAMP(6)-INTERVAL 1 DAY WHERE"
+                    + " conversation_id=? AND source='SUMMARY'",
+                conv);
+        assertEquals(0, knowledge.memories(p, "new summary", 0).size());
+        knowledge.pruneExpiredMemories();
+        assertEquals(
+                0L,
+                sql.count(
+                        "SELECT COUNT(*) FROM memory_entries WHERE summary_conversation=?", conv));
+        for (int n = 0; n < 101; n++) knowledge.remember(p, "page-fixture " + n);
+        assertEquals(100, knowledge.memories(p, "page-fixture", 0).size());
+        assertEquals(1, knowledge.memories(p, "page-fixture", 100).size());
+    }
+
+    @Test
     void revisionsPinSkillsAndMembershipControlsMemoryAndBudgets() {
         var owner = new io.superharness.domain.Principal("policy", "lead");
         var member = new io.superharness.domain.Principal("policy", "reader");
@@ -265,7 +367,9 @@ class AccessTest {
                 io.superharness.domain.Problem.class,
                 () -> tenants.member(owner, "lead", "MEMBER", true));
         tenants.limits(owner, 4, 10000, 1000, 1);
-        var skill = knowledge.publish(owner, "format", "1", "return text", "Format text", java.util.Map.of());
+        var skill =
+                knowledge.publish(
+                        owner, "format", "1", "return text", "Format text", java.util.Map.of());
         var agent = catalog.createAgent(owner, "budget test");
         var revision =
                 catalog.publish(

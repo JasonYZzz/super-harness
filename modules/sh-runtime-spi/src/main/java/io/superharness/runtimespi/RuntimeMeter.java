@@ -13,5 +13,28 @@ public interface RuntimeMeter {
 
     void tool(String name);
 
+    default java.util.List<String> searchMemory(String query) {
+        return java.util.List.of();
+    }
+
+    default java.util.List<String> searchSession(String query, int limit) {
+        return java.util.List.of();
+    }
+
+    default String searchDocuments(String query) { return "[]"; }
+
+    default String legacyFile(String path) {
+        return "";
+    }
+
+    default boolean publishedSlot(UUID slot) {
+        return false;
+    }
+
+    default void stageMemory(
+            java.util.List<String> facts, String summary, java.util.List<String> legacy) {
+        throw new UnsupportedOperationException("No durable memory publisher");
+    }
+
     default void plan(java.util.List<java.util.Map<String, Object>> tasks) {}
 }

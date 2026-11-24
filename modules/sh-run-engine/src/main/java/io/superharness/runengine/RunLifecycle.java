@@ -11,11 +11,16 @@ import java.util.concurrent.CancellationException;
 
 @Service
 public class RunLifecycle {
+    private final Knowledge knowledge;
     private final Sql sql;
     private final EventJournal journal;
     private final Catalog catalog;
 
-    public RunLifecycle(Sql sql, EventJournal journal, Catalog catalog) {
+    private final DocumentLibraries libraries;
+
+    public RunLifecycle(Knowledge knowledge, Sql sql, EventJournal journal, Catalog catalog, DocumentLibraries libraries) {
+        this.libraries=libraries;
+        this.knowledge = knowledge;
         this.sql = sql;
         this.journal = journal;
         this.catalog = catalog;
@@ -198,6 +203,83 @@ FROM (SELECT COALESCE(r.input_json->'$.modelOverride',a.config) AS cfg
     }
 
     @Transactional
+    public void stageMemory(
+            Execution e, List<String> facts, String summary, java.util.List<String> legacy) {
+        owned(e);
+        if (!e.turn().memoryEnabled()) throw new IllegalStateException("Memory disabled");
+        var pending = new LinkedHashMap<String, Object>();
+        pending.put("facts", facts);
+        pending.put("legacy", legacy);
+        pending.put("summary", summary);
+        pending.put("summaryId", e.turn().recall().summaryId());
+        sql.update(
+                "UPDATE agent_runs SET pending_memory=? WHERE tenant_id=? AND id=?",
+                sql.json(pending),
+                e.tenant(),
+                e.run());
+    }
+
+    @Transactional
+    public List<String> searchSession(Execution e, String query, int limit) {
+        var row = owned(e);
+        if (!e.turn().memoryEnabled()) throw new IllegalStateException("Memory disabled");
+        return sql
+                .rows(
+                        """
+                        SELECT LEFT(CONCAT(r.input_json->>'$.text',CHAR(10),ev.payload->>'$.text'),4000) AS excerpt
+                        FROM agent_runs r JOIN run_events ev ON ev.tenant_id=r.tenant_id AND ev.run_id=r.id
+                            AND ev.event_type='run.completed'
+                        WHERE r.tenant_id=? AND r.requested_by=? AND r.conversation_id=? AND r.status='SUCCEEDED'
+                            AND (LOCATE(LOWER(?),LOWER(r.input_json->>'$.text'))>0
+                              OR LOCATE(LOWER(?),LOWER(ev.payload->>'$.text'))>0)
+                        ORDER BY r.accepted_at DESC,r.id LIMIT ?
+                        """,
+                        e.tenant(),
+                        row.get("requested_by"),
+                        e.turn().conversation(),
+                        query,
+                        query,
+                        limit)
+                .stream()
+                .map(entry -> Objects.toString(entry.get("excerpt"), ""))
+                .toList();
+    }
+
+    @Transactional
+    public String searchDocuments(Execution e,String query) {
+        var row=owned(e);
+        if(e.turn().libraryId()==null) throw Problem.missing();
+        var principal=new Principal(e.tenant(),row.get("requested_by").toString());
+        return sql.json(libraries.search(principal,e.turn().libraryId(),query));
+    }
+
+    @Transactional
+    public String legacyFile(Execution e, String path) {
+        var row = owned(e);
+        if (!e.turn().memoryEnabled()) throw new IllegalStateException("Memory disabled");
+        return knowledge.legacyFile(
+                e.tenant(), row.get("requested_by").toString(), e.turn().conversation(), path);
+    }
+
+    public boolean publishedSlot(Execution e, UUID slot) {
+        return sql.count(
+                        "SELECT COUNT(*) FROM agent_runs WHERE tenant_id=? AND conversation_id=?"
+                                + " AND slot_id=? AND status='SUCCEEDED'",
+                        e.tenant(),
+                        e.turn().conversation(),
+                        slot)
+                > 0;
+    }
+
+    @Transactional
+    public List<String> searchMemory(Execution e, String query) {
+        var row = owned(e);
+        if (!e.turn().memoryEnabled()) throw new IllegalStateException("Memory disabled");
+        return knowledge.recall(
+                e.tenant(), row.get("requested_by").toString(), e.turn().conversation(), query, 12);
+    }
+
+    @Transactional
     public void delta(Execution e, String text) {
         var row = owned(e);
         if (cancelRequested(row) || overdue(e.tenant(), e.run())) throw new CancellationException();
@@ -216,6 +298,7 @@ FROM (SELECT COALESCE(r.input_json->'$.modelOverride',a.config) AS cfg
             terminal(row, "FAILED", "run.failed", error, Map.of("code", error));
             return;
         }
+        knowledge.publishMemory(row);
         sql.update(
                 "UPDATE conversations SET state_slot=? WHERE tenant_id=? AND id=?",
                 e.turn().slot(),
@@ -314,7 +397,7 @@ WHERE tenant_id=? AND id=?
         var run = Sql.uuid(row.get("id"));
         sql.update(
                 """
-                UPDATE agent_runs SET status=?,error_code=?,lease_owner=NULL,lease_deadline=NULL,
+                UPDATE agent_runs SET pending_memory=NULL,status=?,error_code=?,lease_owner=NULL,lease_deadline=NULL,
                   finished_at=UTC_TIMESTAMP(6),fence=fence+1 WHERE tenant_id=? AND id=?
                 """,
                 status,
@@ -362,6 +445,16 @@ WHERE tenant_id=? AND id=?
                                 approval)
                         .isEmpty()) throw new Problem(409, "APPROVAL_CLOSED");
         cancel(p, run);
+    }
+
+    @Transactional
+    public void withdraw(Principal p, UUID run) {
+        catalog.role(p);
+        var row=lock(p.tenant(),run);
+        if (!p.user().equals(row.get("requested_by"))) throw Problem.missing();
+        if ("CANCELLED".equals(row.get("status"))) return;
+        if (!"QUEUED".equals(row.get("status"))) throw new Problem(409,"RUN_ALREADY_STARTED");
+        cancel(p,run);
     }
 
     @Transactional
@@ -445,7 +538,7 @@ WHERE tenant_id=? AND id=?
         }
         sql.update(
                 """
-                UPDATE agent_runs SET status='RECOVERY_REQUIRED',error_code='LEASE_EXPIRED',
+                UPDATE agent_runs SET pending_memory=NULL,status='RECOVERY_REQUIRED',error_code='LEASE_EXPIRED',
                   fence=fence+1,lease_deadline=NULL,lease_owner=NULL WHERE tenant_id=? AND id=?
                 """,
                 tenant,

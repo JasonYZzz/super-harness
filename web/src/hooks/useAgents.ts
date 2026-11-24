@@ -1,62 +1,31 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { agentApi } from '../api';
-import type { AgentView, CreateAgentRequest, UpdateAgentRequest } from '../api';
+import type { CreateAgentRequest, UpdateAgentRequest } from '../api';
 
-/**
- * Manages the full agent list with CRUD operations.
- * Fetches on mount and automatically re-fetches after each mutation.
- */
+const key = ['agents'];
 export function useAgents() {
-	const [agents, setAgents] = useState<AgentView[]>([]);
-	const [loading, setLoading] = useState(false);
-	const [error, setError] = useState<Error | null>(null);
-
-	const refetch = useCallback(async () => {
-		setLoading(true);
-		setError(null);
-		try {
-			const res = await agentApi.list();
-			setAgents(res.agents);
-		} catch (e) {
-			setError(e as Error);
-		} finally {
-			setLoading(false);
-		}
-	}, []);
-
-	useEffect(() => {
-		refetch();
-	}, [refetch]);
-
-	/** Creates a new agent and refreshes the list. */
-	const create = useCallback(
-		async (body: CreateAgentRequest) => {
-			const res = await agentApi.create(body);
+	const cache = useQueryClient();
+	const query = useQuery({ queryKey: key, queryFn: agentApi.list });
+	const refetch = () => cache.invalidateQueries({ queryKey: key });
+	return {
+		agents: query.data?.agents ?? [],
+		loading: query.isPending,
+		error: query.error,
+		refetch,
+		create: async (body: CreateAgentRequest) => {
+			const created = await agentApi.create(body);
 			await refetch();
-			return res;
+			return created;
 		},
-		[refetch],
-	);
-
-	/** Partially updates an agent and refreshes the list. */
-	const update = useCallback(
-		async (agentId: string, body: UpdateAgentRequest) => {
-			const res = await agentApi.update(agentId, body);
+		update: async (id: string, body: UpdateAgentRequest) => {
+			const updated = await agentApi.update(id, body);
 			await refetch();
-			return res;
+			return updated;
 		},
-		[refetch],
-	);
-
-	/** Deletes an agent and refreshes the list. */
-	const remove = useCallback(
-		async (agentId: string) => {
-			await agentApi.delete(agentId);
+		remove: async (id: string) => {
+			await agentApi.delete(id);
 			await refetch();
 		},
-		[refetch],
-	);
-
-	return { agents, loading, error, refetch, create, update, remove };
+	};
 }

@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import {
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   writeFileSync,
   copyFileSync,
@@ -287,6 +288,16 @@ async function runSuite() {
   await stop(firstApi, "SIGKILL");
   start("api");
   await healthy();
+  const enqueue = { threadId: chaosThread, runId:"queue-test",messages:[{role:"user",id:"q",content:"next"}],forwardedProps:{"harness.enqueue":true} };
+  const ack = async body => {
+    const text=await (await fetchApi("/api/v1/ag-ui/runs",body)).text();
+    return JSON.parse(text.split("\n").filter(line=>line.startsWith("data: ")).map(line=>line.slice(6)).find(line=>JSON.parse(line).type==="RUN_FINISHED")).result.taskId;
+  };
+  const queued=await ack(enqueue);
+  assert.equal(await ack(enqueue),queued);
+  assert.equal((await api("/runs/"+queued)).status,"QUEUED");
+  await ack({threadId:chaosThread,runId:"withdraw-test",messages:[],forwardedProps:{"harness.withdraw":queued}});
+  assert.equal((await api("/runs/"+queued)).status,"CANCELLED");
   await waitStatus(runId, "RECOVERY_REQUIRED", 75);
   const elapsed = (Date.now() - killed) / 1000;
   assert.ok(elapsed <= 75);
@@ -390,9 +401,18 @@ async function runSuite() {
   assert.equal((await api("/runs/" + delegated + "/trace")).modelCalls.length, 3);
   console.log("PASS channel deduplication, provider web search request, plan writing and metered child analysis");
   const document = "---\nname: fixture-skill\ndescription: Fixture reference lookup\n---\npinned instructions for this test";
-  const {id: skillId} = await api("/skills", {
-    version: "1", content: document, resources: {"references/guide.md": "pinned reference text"},
+  mkdirSync(path("fixture-skill/references"), {recursive: true});
+  writeFileSync(path("fixture-skill/SKILL.md"), document);
+  writeFileSync(path("fixture-skill/references/guide.md"), "pinned reference text");
+  command("jar", ["--create", "--no-manifest", "--file", path("fixture.zip"), "-C", dir, "fixture-skill"]);
+  const upload = new FormData();
+  upload.set("file", new Blob([readFileSync(path("fixture.zip"))]), "fixture.zip");
+  upload.set("version", "1");
+  const imported = await fetch(env.SH_API_URL + "/api/v1/skills/import", {
+    method: "POST", headers: {Authorization: "Bearer " + token()}, body: upload,
   });
+  assert.equal(imported.status, 200);
+  const {id: skillId} = await imported.json();
   const {id: otherId} = await api("/skills", {
     name: "other", version: "1", description: "Another skill purpose", content: "unselected skill body",
   });
@@ -414,11 +434,76 @@ async function runSuite() {
       for (const purpose of ["Fixture reference lookup", "Another skill purpose"]) assert.ok(first.includes(purpose));
       for (const body of ["pinned instructions for this test", "unselected skill body", "pinned reference text"]) assert.ok(!first.includes(body));
     }
-    const toolResult = mock.calls.at(-1).messages.at(-1);
+    const toolResult = mock.calls.slice(before).map(call => call.messages.at(-1)).findLast(m => m.role === "tool");
     assert.equal(toolResult.role, "tool");
     assert.ok(JSON.stringify(toolResult.content).includes(expected), JSON.stringify(toolResult.content));
   }
   console.log("PASS frozen skill catalog, on-demand document/reference loading and cross-turn memory");
+  const resources = await api("/conversations/" + memoryConversation + "/resources");
+  assert.deepEqual(resources.skills.map(s=>s.name), ["fixture-skill","other"]);
+  assert.ok(resources.skills.every(s=>!Object.hasOwn(s,"content")));
+  const library = await api("/libraries",{name:"Engineering"});
+  await api("/libraries/"+library.id+"/documents",{name:"manual.md",content:"The antenna is on the roof."});
+  assert.equal((await api("/libraries/"+library.id+"/search?q=antenna"))[0].name,"manual.md");
+  const put = (path,body) => fetch(env.SH_API_URL+"/api/v1"+path,{method:"PUT",headers:{
+    Authorization:"Bearer "+token(),"Content-Type":"application/json"},body:JSON.stringify(body)});
+  assert.ok((await put("/conversations/"+memoryConversation+"/library",{libraryId:library.id})).ok);
+  const beforeDoc=mock.calls.length;
+  await waitStatus(await submit(memoryConversation,"document-search-fixture"),"SUCCEEDED");
+  assert.ok(mock.calls.slice(beforeDoc).some(c=>c.messages.at(-1).role==="tool" &&
+    JSON.stringify(c.messages.at(-1).content).includes("on the roof")));
+  assert.ok((await put("/conversations/"+memoryConversation+"/library",{libraryId:null})).ok);
+  const scheduledAgent=await api("/agents",{name:"schedule fixture",revision:echo});
+  const schedule=await api("/schedules",{name:"Daily review",description:"Review today",agent_id:scheduledAgent.agentId,
+    model:"local-echo",timezone:"Asia/Shanghai",cron_expression:"0 9 * * *",started_at:new Date().toISOString(),
+    permission_mode:"dont_ask",stateful:true});
+  const due=minutesAgo=>db.query("USE platform; UPDATE agent_schedules SET next_due=DATE_FORMAT(UTC_TIMESTAMP()-INTERVAL "+minutesAgo+" MINUTE,'%Y-%m-%d %H:%i:00') WHERE id=UUID_TO_BIN('"+schedule.schedule_id+"')");
+  due(2);
+  let scheduledSessions;
+  await until(async () => {
+    scheduledSessions=(await api("/schedules/"+schedule.schedule_id+"/sessions")).sessions;
+    return scheduledSessions.length>0;
+  });
+  assert.equal(scheduledSessions.length,1);
+  assert.equal((await api("/conversations?agentId="+scheduledAgent.agentId))[0].scheduleId,schedule.schedule_id);
+  const scheduledRun=(await api("/runs")).find(r=>r.conversationId===scheduledSessions[0].id);
+  await waitStatus(scheduledRun.runId,"SUCCEEDED");
+  const activate = enabled => fetch(env.SH_API_URL+"/api/v1/schedules/"+schedule.schedule_id,{
+    method:"PATCH",headers:{Authorization:"Bearer "+token(),"Content-Type":"application/json"},body:JSON.stringify({enabled})});
+  assert.ok((await activate(false)).ok);
+  assert.equal((await api("/schedules")).schedules.find(s=>s.id===schedule.schedule_id).data.enabled,false);
+  assert.ok((await activate(true)).ok);
+  due(1);
+  await until(async () => (await api("/runs")).filter(r=>r.conversationId===scheduledSessions[0].id).length===2);
+  assert.equal((await api("/schedules/"+schedule.schedule_id+"/sessions")).sessions.length,1);
+  console.log("PASS pinned session resources, document lookup by model, scheduled turn and conversation origin");
+  const otherMemoryChat = await conversation(agentId,{...provider,useMemory:true});
+  const beforeShared = mock.calls.length;
+  await waitStatus(await submit(otherMemoryChat,"memory-read-fixture"),"SUCCEEDED");
+  assert.ok(mock.calls.slice(beforeShared).some(c => c.messages.at(-1).role === "tool" &&
+    JSON.stringify(c.messages.at(-1).content).includes("remember-fixture-value")));
+  const explicit = (await api("/memory?q=remember-fixture")).find(row=>row.source==="CHAT");
+  assert.ok(explicit);
+  await api("/memory",{text:"older-private-note"});
+  for(let i=0;i<5;i++) await api("/memory",{text:"recent note "+i});
+  const beforeSearch = mock.calls.length;
+  await waitStatus(await submit(otherMemoryChat,"memory-find-fixture"),"SUCCEEDED");
+  assert.ok(!JSON.stringify(mock.calls[beforeSearch].messages.at(-1)).includes("older-private-note"));
+  assert.ok(mock.calls.slice(beforeSearch).some(c=>c.messages.at(-1).role==="tool" &&
+    JSON.stringify(c.messages.at(-1).content).includes("older-private-note")));
+  await waitStatus(await submit(otherMemoryChat,"curate-fixture"),"SUCCEEDED");
+  const summary=(await api("/memory?q=prefers")).find(row=>row.source==="SUMMARY");
+  assert.ok(summary?.expiresAt);
+  const freshMemory = await conversation(agentId,{...provider,useMemory:true});
+  const beforeRecall=mock.calls.length;
+  await waitStatus(await submit(freshMemory,"fresh chat"),"SUCCEEDED");
+  assert.ok(JSON.stringify(mock.calls[beforeRecall].messages).includes("prefers short reports"));
+  const removed=await fetch(env.SH_API_URL+"/api/v1/memory/"+summary.id,{method:"DELETE",headers:{Authorization:"Bearer "+token()}});
+  assert.ok(removed.ok);
+  const afterDelete=mock.calls.length;
+  await waitStatus(await submit(freshMemory,"after deletion"),"SUCCEEDED");
+  assert.ok(!JSON.stringify(mock.calls[afterDelete].messages).includes("prefers short reports"));
+  console.log("PASS cross-conversation personal memory, keyword recall, agent summary and deletion");
   const toolRun = await submit(
     await conversation(agentId, {
       ...provider,
@@ -473,6 +558,8 @@ async function runSuite() {
           ...echo,
           outputMode: "APPROVED_ARTIFACT",
         }),
+        SH_TEST_SKILL_ZIP: path("fixture.zip"),
+        SH_TEST_QUEUE_PATH: "/chat/" + agentId + "/" + await conversation(agentId,provider),
         SH_TEST_PLAN_PATH: "/chat/" + agentId + "/" + browserPlan,
       },
     });
@@ -565,6 +652,8 @@ async function runSuite() {
   await assert.rejects(tenant("super-harness", "another"), { cause: 403 });
   const secondTenant = mock.signed("super-harness", "release-second");
   assert.equal((await api("/tenant", undefined, secondTenant)).role, "MEMBER");
+  await assert.rejects(api("/libraries/"+library.id+"/documents",undefined,secondTenant), {cause:404});
+  await assert.rejects(api("/schedules/"+schedule.schedule_id+"/sessions",undefined,secondTenant), {cause:404});
   await assert.rejects(api("/agents/" + agentId, undefined, secondTenant), { cause: 404 });
   const reviewer = "release-reviewer";
   const identity = subject => mock.signed("super-harness", "local", subject);

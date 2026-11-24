@@ -2,6 +2,7 @@ package io.superharness.api;
 
 import io.agentscope.core.skill.util.MarkdownSkillParser;
 import io.superharness.domain.Problem;
+import io.superharness.persistence.Catalog;
 import io.superharness.persistence.Knowledge;
 
 import jakarta.validation.Valid;
@@ -11,14 +12,19 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
 import java.util.*;
 
 @RestController
 @RequestMapping("/api/v1")
 class KnowledgeApi {
     private final Knowledge knowledge;
+    private final Catalog catalog;
 
-    KnowledgeApi(Knowledge knowledge) {
+    KnowledgeApi(Knowledge knowledge, Catalog catalog) {
+        this.catalog = catalog;
         this.knowledge = knowledge;
     }
 
@@ -43,6 +49,10 @@ class KnowledgeApi {
 
     @PostMapping("/skills")
     Object publish(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody Skill s) {
+        return publishVersion(jwt, s);
+    }
+
+    private Object publishVersion(Jwt jwt, Skill s) {
         String name = s.name();
         String description = s.description();
         var parsed = MarkdownSkillParser.parse(s.content());
@@ -58,11 +68,20 @@ class KnowledgeApi {
         }
         if (name == null || name.isBlank() || name.length() > 120)
             throw new Problem(400, "INVALID_SKILL_NAME");
-        if (description == null || description.isBlank()) description = name + " (" + s.version() + ")";
+        if (description == null || description.isBlank())
+            description = name + " (" + s.version() + ")";
         if (description.length() > 1024)
             throw new Problem(400, "INVALID_SKILL_DESCRIPTION");
         return Map.of("id", knowledge.publish(Identity.principal(jwt), name, s.version(),
                 s.content(), description, s.resources() == null ? Map.of() : s.resources()));
+    }
+
+    @PostMapping(value = "/skills/import", consumes = "multipart/form-data")
+    Object importArchive(@AuthenticationPrincipal Jwt jwt,
+            @RequestPart @NotBlank @Size(max = 80) String version,
+            @RequestPart MultipartFile file) throws IOException {
+        catalog.requireEditor(Identity.principal(jwt));
+        return publishVersion(jwt, SkillArchive.read(file, version));
     }
 
     @DeleteMapping("/skills/{id}")
@@ -71,8 +90,11 @@ class KnowledgeApi {
     }
 
     @GetMapping("/memory")
-    Object list(@AuthenticationPrincipal Jwt jwt) {
-        return knowledge.memories(Identity.principal(jwt));
+    Object list(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestParam(defaultValue = "") @Size(max = 256) String q,
+            @RequestParam(defaultValue = "0") @Min(0) int offset) {
+        return knowledge.memories(Identity.principal(jwt), q, offset);
     }
 
     @PostMapping("/memory")

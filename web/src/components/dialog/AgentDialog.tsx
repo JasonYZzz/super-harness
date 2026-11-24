@@ -26,7 +26,7 @@ import { useAgentSchema } from '@/hooks/useAgentSchema';
 import { formatApiErrorForAlert } from '@/lib/api-error';
 
 interface Props {
-	onCreated?: () => void;
+	onCreated?: (id:string) => void;
 	children: ReactNode;
 }
 
@@ -63,8 +63,9 @@ export function AgentDialog({ onCreated, children }: Props) {
 		setErrorMsg('');
 		setSubmitting(true);
 		try {
-			await create(
+			const created = await create(
 				{
+					mcp_profile: String(values.identity.mcp_profile ?? ''),
 					use_memory: Boolean(values.identity.use_memory),
 					skills: String(values.identity.skill_ids ?? '').split(',').filter(Boolean),
 					name, model:String(values.identity.model),publish_artifact:Boolean(values.identity.publish_artifact),sandbox:Boolean(values.identity.sandbox),
@@ -77,7 +78,7 @@ export function AgentDialog({ onCreated, children }: Props) {
 				},
 			);
 			setOpen(false);
-			onCreated?.();
+			onCreated?.(created.agent_id);
 		} catch (e) {
 			setErrorMsg(formatApiErrorForAlert(e));
 		} finally {

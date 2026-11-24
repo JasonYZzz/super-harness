@@ -29,14 +29,20 @@ public class Runs {
             String input,
             String key,
             int timeout) {
-        return admit(p, conversation, agent, revision, input, key, timeout, null, null);
+        return admit(p, conversation, agent, revision, input, key, timeout, null, null, null, null);
     }
 
     @Transactional
     public Map<String, Object> submitInteraction(
             Principal p, UUID thread, String runId, String messageId, String text) {
         String key = interactionKey(thread, runId);
-        return admit(p, thread, null, null, text, key, 1200, messageId, runId);
+        return admit(p, thread, null, null, text, key, 1200, messageId, runId, null, null);
+    }
+
+    @Transactional
+    public Map<String,Object> submitScheduled(Principal p, UUID conversation, UUID agent, UUID revision,
+            String input, String key, String permission, Map<String,Object> model) {
+        return admit(p,conversation,agent,revision,input,key,1200,null,null,permission,model);
     }
 
     public String interactionKey(UUID thread, String runId) {
@@ -52,7 +58,7 @@ public class Runs {
             String key,
             int timeout,
             String messageId,
-            String interactionId) {
+            String interactionId, String scheduledPermission, Map<String,Object> scheduledModel) {
         catalog.role(p);
         if (key == null || key.isBlank() || key.length() > 180)
             throw new Problem(400, "INVALID_IDEMPOTENCY_KEY");
@@ -63,8 +69,10 @@ public class Runs {
         var conv =
                 sql.first(
                                 "SELECT"
-                                    + " agent_id,revision_id,model_override,permission_mode,CAST(archived"
-                                    + " AS UNSIGNED) AS archived FROM conversations WHERE"
+                                    + " agent_id,revision_id,library_id,model_override,permission_mode,CAST(archived"
+                                    + " AS UNSIGNED) AS archived, (SELECT CAST(a.archived AS UNSIGNED) FROM"
+                                    + " agent_definitions a WHERE a.id=conversations.agent_id AND"
+                                    + " a.tenant_id=conversations.tenant_id) AS agent_archived FROM conversations WHERE"
                                     + " tenant_id=? AND id=? AND owner_id=?",
                                 p.tenant(),
                                 conversation,
@@ -87,6 +95,7 @@ public class Runs {
                 throw new Problem(409, "IDEMPOTENCY_KEY_REUSED");
             return status(p, Sql.uuid(existing.get().get("id")));
         }
+        if (((Number) conv.get("agent_archived")).intValue() != 0) throw new Problem(409, "AGENT_ARCHIVED");
         if (sql.first(
                         """
                         SELECT id FROM agent_runs WHERE tenant_id=? AND conversation_id=?
@@ -133,8 +142,10 @@ public class Runs {
             inputData.put("messageId", messageId);
             inputData.put("interactionId", interactionId);
         }
-        inputData.put("permissionMode", conv.get("permission_mode"));
-        if (conv.get("model_override") != null)
+        if (conv.get("library_id") != null) inputData.put("libraryId", Sql.uuid(conv.get("library_id")).toString());
+        inputData.put("permissionMode", scheduledPermission == null ? conv.get("permission_mode") : scheduledPermission);
+        if (scheduledModel != null) inputData.put("modelOverride", scheduledModel);
+        else if (conv.get("model_override") != null)
             inputData.put("modelOverride", sql.parse(conv.get("model_override")));
         var id = UUID.randomUUID();
         sql.update(

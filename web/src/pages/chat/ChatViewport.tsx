@@ -30,6 +30,7 @@ import { ConfirmCard } from '@/components/chat/ConfirmCard';
 import { PanelDock, type PanelDescriptor, type PanelKey } from '@/components/panel/PanelDock';
 import { PanelEmpty } from '@/components/panel/PanelEmpty';
 import { PermissionPanel } from '@/components/panel/PermissionPanel';
+import { SessionResources } from '@/components/panel/SessionResources';
 import { TaskPanel } from '@/components/panel/TaskPanel';
 import { TeamPanel } from '@/components/panel/TeamPanel';
 import { LlmSelect } from '@/components/select/LlmSelect';
@@ -328,6 +329,7 @@ export function ChatViewport({
 		runs: t('harness.runs'),
 	};
 
+	const queued = chat.turns.filter(turn => turn.status === 'QUEUED' && turn.runId !== chat.active?.runId);
 	const pending = chat.interrupt;
 	const decide = async (approve: boolean) => chat.decide(approve);
 	const approvalCard = pending && !chat.busy && (pending.metadata?.canDecide ? (
@@ -354,12 +356,12 @@ export function ChatViewport({
 			icon: <History className="size-4" />,
 			content: <Runs turns={chat.turns} recover={turn => chat.control(turn, 'recover')} usage={chat.usage} />,
 		},
-		mcp: { title: 'MCP', icon: <Cable className="size-4" />, content: null },
-		skill: { title: labels.skill, icon: <BookText className="size-4" />, content: null },
+		mcp: { title: 'MCP', icon: <Cable className="size-4" />, content: <SessionResources sessionId={sessionId} panel="mcp"/> },
+		skill: { title: labels.skill, icon: <BookText className="size-4" />, content: <SessionResources sessionId={sessionId} panel="skill"/> },
 		knowledge: {
 			title: labels.knowledge,
 			icon: <Database className="size-4" />,
-			content: null,
+			content: <SessionResources sessionId={sessionId} panel="knowledge"/>,
 		},
 		plan: {
 			title: labels.plan,
@@ -550,10 +552,12 @@ export function ChatViewport({
 								msgs={chat.msgs}
 								loading={!!sessionId && !chat.cursor && chat.busy}
 								phase={chat.active?.status === 'CANCEL_REQUESTED' ? 'interrupting' : chat.active ? 'streaming' : 'idle'}
-								disabled={!signedIn() || !chat.canSend || savingModel}
+								disabled={!signedIn() || (!chat.canSend && !chat.canQueue) || savingModel}
 								onSend={async (blocks) => {
 									try {
-										chat.send(blocks.filter(b => b.type === 'text').map(b => b.text).join('\n'));
+										const text=blocks.filter(b => b.type === 'text').map(b => b.text).join('\n');
+										if(chat.canQueue) await chat.enqueue(text);
+										else chat.send(text);
 									} catch (e) {
 										toast.error(String(e));
 										throw e;
@@ -581,7 +585,11 @@ export function ChatViewport({
 								onCwdChange={unavailable}
 								asrDisabled
 								voiceDisabled
-								footerSlot={approvalCard}
+								footerSlot={approvalCard || (queued.length ? <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border bg-card p-2">
+									{queued.map(turn=><div key={turn.runId} className="flex items-center gap-2 text-sm">
+										<span className="truncate">{t('harness.queued')} · {turn.input}</span>
+										<Button variant="ghost" size="sm" className="ml-auto" onClick={()=>chat.control(turn,'withdraw').catch(e=>toast.error(String(e)))}>{t('harness.withdraw')}</Button>
+									</div>)}</div> : null)}
 							/>
 						</div>
 						{chat.error && <p role="alert">{chat.error}</p>}

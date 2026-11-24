@@ -67,7 +67,7 @@ export interface ChatConfig {
 export type ChatConfigInput = Partial<ChatConfig>;
 
 export interface AgentData {
- model?:string; publish_artifact?:boolean; use_memory?:boolean; skills?:string[]; sandbox?:boolean;
+ model?:string; publish_artifact?:boolean; use_memory?:boolean; mcp_profile?:string; skills?:string[]; sandbox?:boolean;
 	id: string;
 	name: string;
 	system_prompt: string;
@@ -85,7 +85,7 @@ export interface AgentView extends RecordBase {
 }
 
 export interface CreateAgentRequest {
- model?:string; publish_artifact?:boolean; use_memory?:boolean; skills?:string[]; sandbox?:boolean;
+ model?:string; publish_artifact?:boolean; use_memory?:boolean; mcp_profile?:string; skills?:string[]; sandbox?:boolean;
 	name: string;
 	system_prompt?: string;
 	chat_config?: ChatConfigInput;
@@ -102,7 +102,7 @@ export interface CreateAgentResponse {
 }
 
 export interface UpdateAgentRequest {
- model?:string; publish_artifact?:boolean; use_memory?:boolean; skills?:string[]; sandbox?:boolean;
+ model?:string; publish_artifact?:boolean; use_memory?:boolean; mcp_profile?:string; skills?:string[]; sandbox?:boolean;
 	name?: string;
 	system_prompt?: string;
 	chat_config?: ChatConfigInput;
@@ -756,6 +756,7 @@ export interface ScheduleData {
 }
 
 export interface ScheduleRecord extends RecordBase {
+	last_error?: string | null;
 	user_id: string;
 	agent_id: string;
 	data: ScheduleData;
